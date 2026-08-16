@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Layout src/ installe en editable (uv sync) : "src" reste importable comme
+# aujourd'hui (from src.db import ...) quel que soit le repertoire courant ou
+# la profondeur du script qui l'importe -- plus besoin que le script soit a
+# la racine du repo pour que la resolution d'import fonctionne.
+packages = ["src"]
+
+[project]
+name = "russia-monitor"
+version = "0.1.0"
+description = "Veille automatisee des medias russophones : scraping RSS/HTML, analyse Mistral, DuckDB, dashboard Streamlit."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # --- Coeur ---
+    "streamlit>=1.40",
+    "duckdb>=1.1",
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "plotly>=5.24",
+    # --- Collecte / scraping ---
+    "httpx>=0.27",
+    "requests>=2.32",
+    "feedparser>=6.0.11",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "trafilatura>=1.12",
+    "brotli>=1.1.0",
+    "langdetect>=1.0.9",
+    "pyyaml>=6.0",
+    # Sources video : listing des chaines + URL des pistes de sous-titres.
+    # A garder a jour -- YouTube casse regulierement les extracteurs, et
+    # yt-dlp corrige en quelques jours ; une version figee finit par ne plus
+    # rien renvoyer.
+    "yt-dlp>=2025.1.15",
+    # --- Transcription des emissions de television (src/rutube_scrape.py) ---
+    # RuTube n'expose aucun sous-titre : la transcription se fait en local.
+    "faster-whisper>=1.2",
+    # Bibliotheques CUDA runtime, indispensables a l'inference GPU de
+    # ctranslate2 : sans elles le modele se charge mais l'inference echoue sur
+    # « cublas64_12.dll is not found ». Declarees ici pour qu'un `uv sync` ne
+    # les retire pas. Inutiles sans carte NVIDIA (le module bascule alors sur
+    # CPU tout seul), mais inoffensives.
+    "nvidia-cublas-cu12>=12.9",
+    "nvidia-cudnn-cu12>=9.0",
+    # --- Analyses (Mistral) ---
+    "mistralai>=1.2",
+    # --- Topic modeling (analyze_topics.py) ---
+    "scikit-learn>=1.5",
+    "bertopic>=0.16",
+    "sentence-transformers>=3.0",
+    "pymorphy3>=1.2",        # lemmatisation russe (mots-cles de theme)
+    "pymorphy3-dicts-ru>=2.4",
+    "nltk>=3.9",             # liste de stopwords russes (nltk.corpus.stopwords)
+    # --- Configuration .env (si chargement automatique active) ---
+    "python-dotenv>=1.0",
+    "pip-system-certs>=5.3",
+]

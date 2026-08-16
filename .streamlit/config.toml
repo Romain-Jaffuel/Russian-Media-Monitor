@@ -1,0 +1,18 @@
+# Theme epingle. Les couleurs des graphiques Plotly sont codees en dur en
+# sombre dans dashboard/app.py (style()) : sans ce fichier, un poste dont le
+# navigateur est en clair afficherait des rectangles sombres sur fond blanc.
+# Epingler le theme garantit que l'app rend partout comme elle est concue.
+[theme]
+base = "dark"
+primaryColor = "#00C2A8"          # accent d'interface (teal). Volontairement
+                                  # hors des palettes de donnees : le bleu et
+                                  # le rouge portent deja un sens (pro / anti),
+                                  # les reutiliser pour le chrome brouillerait
+                                  # la lecture des graphiques.
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#161A23"
+textColor = "#E6E8EB"
+font = "sans serif"
+
+[server]
+headless = true

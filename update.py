@@ -1,0 +1,132 @@
+"""Routine complete russia-monitor : collecte + refetch + analyses + diagnostic.
+
+Une seule commande pour tout mettre a jour :
+    python update.py
+
+Options :
+    python update.py --skip-pipeline      # passe la collecte
+    python update.py --skip-refetch       # passe le refetch des articles cassés
+    python update.py --skip-analyses      # passe les analyses Mistral
+    python update.py --dashboard          # lance streamlit a la fin
+"""
+import argparse
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+DB_PATH = Path("data/russia.duckdb")
+
+# sys.executable et non "python" : sous le planificateur de taches, le venv
+# n'est pas dans le PATH et tout echouait sur ModuleNotFoundError.
+PY = f'"{sys.executable}"'
+
+STEPS_PIPELINE = [
+    ("Collecte des nouveaux articles", f"{PY} -m src.pipeline"),
+    ("Recuperation dates manquantes (HTML)", f"{PY} scripts/maintenance/fix_missing_dates.py"),
+]
+
+STEPS_REFETCH = [
+    ("Re-fetch articles sans contenu", f"{PY} scripts/maintenance/refetch_missing.py"),
+]
+
+# Entites et posture-par-article ont ete retirees en aout 2026 : un tiers du
+# cout Mistral chacune, pour 67 % d'entites vues une seule fois d'un cote, et
+# une posture deja renseignee a la main dans sources.yaml de l'autre.
+STEPS_ANALYSES = [
+    ("Extraction auteurs", f"{PY} scripts/analysis/extract_authors.py"),
+    ("Sentiment multi-cibles", f"{PY} scripts/analysis/analyze_sentiment_multi_mistral.py"),
+    ("Themes (clustering)", f"{PY} scripts/analysis/analyze_topics.py"),
+]
+
+STEPS_DIAG = [
+    ("Diagnostic couverture", f"{PY} scripts/maintenance/check_coverage.py"),
+]
+
+
+def banner(text):
+    print()
+    print("=" * 72)
+    print(f"  {text}")
+    print("=" * 72)
+
+
+def run_step(label, cmd, idx, total):
+    print(f"\n[{idx}/{total}] {label}")
+    print(f"  > {cmd}")
+    print(f"  {datetime.now().strftime('%H:%M:%S')}")
+    t0 = time.time()
+    result = subprocess.run(cmd, shell=True)
+    dt = time.time() - t0
+    status = "OK" if result.returncode == 0 else "ECHEC"
+    print(f"  [{status}] en {dt:.1f}s")
+    return label, status, dt
+
+
+def check_db_available():
+    """DuckDB n'autorise qu'un seul processus en ecriture : si le dashboard
+    (ou un autre script) a encore la base ouverte, chacune des 9 etapes
+    echouerait une par une avec la meme IOException -- autant le detecter
+    tout de suite et arreter net avec un message clair."""
+    if not DB_PATH.exists():
+        return  # premiere collecte : la base n'existe pas encore, rien a verifier
+    import duckdb
+    try:
+        duckdb.connect(str(DB_PATH)).close()
+    except duckdb.IOException:
+        print(f"\nERREUR : {DB_PATH} est deja ouverte par un autre processus "
+              f"(le dashboard Streamlit, le plus souvent).")
+        print("Fermez-le (Ctrl+C dans son terminal) puis relancez update.py.")
+        sys.exit(1)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--skip-pipeline", action="store_true")
+    ap.add_argument("--skip-refetch", action="store_true")
+    ap.add_argument("--skip-analyses", action="store_true")
+    ap.add_argument("--dashboard", action="store_true")
+    args = ap.parse_args()
+
+    check_db_available()
+
+    steps = []
+    if not args.skip_pipeline:
+        steps += STEPS_PIPELINE
+    if not args.skip_refetch:
+        steps += STEPS_REFETCH
+    if not args.skip_analyses:
+        steps += STEPS_ANALYSES
+    steps += STEPS_DIAG
+
+    banner(f"ROUTINE RUSSIA-MONITOR ({len(steps)} etapes)")
+    print(f"Demarre a {datetime.now().strftime('%H:%M:%S')}")
+
+    t_start = time.time()
+    results = []
+    for i, (label, cmd) in enumerate(steps, 1):
+        results.append(run_step(label, cmd, i, len(steps)))
+
+    total_min = (time.time() - t_start) / 60
+
+    banner(f"TERMINE en {total_min:.1f} minutes")
+    for label, status, dt in results:
+        marker = "OK  " if status == "OK" else "FAIL"
+        print(f"  [{marker}] {label:<40} {dt:>6.1f}s")
+
+    fails = [r for r in results if r[1] != "OK"]
+    if fails:
+        print(f"\n{len(fails)} etapes en echec. Verifiez les logs ci-dessus.")
+        sys.exit(1)
+
+    if args.dashboard:
+        print("\nLancement du dashboard...")
+        subprocess.run("streamlit run dashboard\\app.py", shell=True)
+    else:
+        print("\nPour lancer le dashboard :")
+        print("    streamlit run dashboard\\app.py")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,619 @@
+# Sources presse Russie, veille des médias russophones sur la Russie.
+# `type: scrape` for sites with no usable RSS feed, parsed from their homepage.
+# `type: telegram` for a public Telegram channel: `url` must be its t.me/s/
+# preview (e.g. https://t.me/s/rybar), scraped without authentication --
+# large state channels sometimes disable this preview (rian_ru, rt_russian,
+# tvrussia1 confirmed unreachable this way as of August 2026), in which case
+# they simply aren't addable through this mechanism.
+# Without a `type` key, RSS is assumed.
+#
+# media_type: etat / para_etat / independant / exil
+# legal_status: agent_etranger / organisation_indesirable / aucun
+#   (legal status as designated by the Russian Ministry of Justice / Prosecutor
+#   General; when an outlet carries both designations, the more restrictive one
+#   is used. Checked August 2026 — this list moves fast, re-verify periodically.)
+# historical_stance: free-text, hand-written editorial history/lineage of the
+#   outlet (who founded it, ownership changes, why it ended up where it is).
+#   This is curated by hand, not derived from the data -- update it manually
+#   when an outlet's editorial line or ownership changes.
+sources:
+
+  # =========================================================
+  # Medias d'Etat
+  # =========================================================
+
+  - name: RIA Novosti
+    url: https://ria.ru/export/rss2/archive/index.xml
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Agence publique, reprise en main editoriale en 2013-2014 lors de sa fusion forcee dans Rossiya Segodnya"
+
+  - name: Sputnik
+    # ru.sputniknews.ru (from the original brief) does not resolve; the live
+    # Russian-language domain is sputniknews.ru, corrected after verification.
+    url: https://sputniknews.ru/
+    type: scrape
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Marque de propagande exterieure creee par le Kremlin en 2014 (groupe Rossiya Segodnya)"
+
+  - name: RT
+    url: https://russian.rt.com/rss
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Chaine de propagande exterieure lancee par l'Etat en 2005, ligne pro-Kremlin assumee"
+
+  - name: Rossiya 1 / Vesti (VGTRK)
+    url: https://www.vesti.ru/
+    type: scrape
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Chaine publique historique (VGTRK), alignement total sur la ligne du Kremlin depuis les annees 2000"
+
+  - name: Channel One (Pervyi Kanal)
+    url: https://www.1tv.ru/
+    type: scrape
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Heritiere de la 1ere chaine sovietique, Etat actionnaire majoritaire, ligne pro-Kremlin"
+
+  # =========================================================
+  # Medias para-etatiques / zone grise
+  # =========================================================
+
+  - name: Izvestia
+    url: https://iz.ru/xml/rss/all.xml
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Quotidien sovietique historique, rachete en 2005 par des interets proches du pouvoir"
+
+  - name: Komsomolskaya Pravda
+    url: https://www.kp.ru/
+    type: scrape
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Ex-organe de la jeunesse communiste (Komsomol), tabloide populaire pro-Kremlin depuis les annees 2000"
+
+  - name: Kommersant
+    url: https://www.kommersant.ru/RSS/main.xml
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Journal economique liberal ne en 1989, ligne resserree depuis son rachat par Alicher Ousmanov en 2006"
+
+  - name: RBC
+    url: https://www.rbc.ru/
+    type: scrape
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Media economique jadis independant, purge editoriale en 2016 apres une enquete sur l'entourage de Poutine"
+
+  - name: Vedomosti
+    url: https://www.vedomosti.ru/rss/news.xml
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Ex-coentreprise FT/WSJ reputee rigoureuse, ligne progouvernementale depuis son rachat en 2020"
+
+  - name: Nezavisimaya Gazeta
+    url: https://www.ng.ru/rss/
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Fonde en 1990 comme voix liberale independante, recentre vers le pouvoir dans les annees 2010"
+
+  # =========================================================
+  # Medias independants / en exil
+  # =========================================================
+
+  - name: Meduza
+    url: https://meduza.io/rss/all
+    media_type: exil
+    # Foreign agent since 2021, escalated to "undesirable organization" (banned
+    # outright) in January 2023 -- more severe than the prompt's original
+    # "agent_etranger", corrected after verification.
+    legal_status: organisation_indesirable
+    historical_stance: "Fonde en 2014 en exil par d'anciens journalistes de Lenta.ru, ligne liberale et anti-guerre"
+
+  - name: Novaya Gazeta Europe
+    url: https://novayagazeta.eu/
+    type: scrape
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Antenne en exil de Novaya Gazeta, journal d'opposition historique (Politkovskaia, prix Nobel de la paix 2021)"
+
+  - name: Novaya Gazeta (edition Moscou)
+    url: https://novayagazeta.ru/
+    type: scrape
+    media_type: independant
+    # Russian media license revoked in 2022, but the outlet is still publishing
+    # from Moscow in 2026 under heavy self-censorship constraints.
+    legal_status: aucun
+    historical_stance: "Quotidien d'investigation historique (Politkovskaia, Nobel 2021), plusieurs journalistes assassines, sous forte contrainte depuis 2022"
+
+  - name: TV Rain / Dozhd
+    url: https://tvrain.tv/
+    type: scrape
+    media_type: exil
+    legal_status: organisation_indesirable
+    historical_stance: "Chaine independante nee en 2010, expulsee puis exilee en 2022, ligne liberale anti-guerre"
+
+  - name: Mediazona
+    url: https://zona.media/rss
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Fonde en 2014 par des membres des Pussy Riot, specialise justice et repression"
+
+  - name: The Insider
+    url: https://theins.ru/feed
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Media d'investigation en exil, ligne liberale anti-Kremlin, enquetes conjointes avec Bellingcat"
+
+  - name: iStories (Important Stories)
+    url: https://istories.media/
+    type: scrape
+    media_type: exil
+    # Foreign agent since 2021, also designated "undesirable organization" --
+    # more severe than the prompt's original "agent_etranger", corrected.
+    legal_status: organisation_indesirable
+    historical_stance: "Collectif d'investigation en exil fonde par d'anciens journalistes de RBC/Novaya Gazeta"
+
+  - name: Proekt Media
+    url: https://proekt.media/
+    type: scrape
+    media_type: exil
+    legal_status: organisation_indesirable
+    historical_stance: "Media d'investigation en exil specialise sur la corruption du pouvoir"
+
+  - name: The Bell
+    url: https://thebell.io/
+    type: scrape
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Newsletter economique en exil fondee en 2017 par d'anciens journalistes de Vedomosti/RBC"
+
+  - name: Verstka
+    url: https://verstka.media/feed
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Media d'investigation en exil fonde en 2022 apres le debut de la guerre en Ukraine"
+
+  # =========================================================
+  # Telegram -- medias d'Etat (twin des sources presse ci-dessus ;
+  # utilise notamment pour contourner le blocage anti-bot de tass.ru,
+  # cf. scripts/maintenance/diagnose_analyses.py)
+  # =========================================================
+
+  - name: TASS (Telegram)
+    url: https://t.me/s/tass_agency
+    type: telegram
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Agence de presse d'Etat -- voir TASS. Chaine Telegram utilisee car tass.ru bloque le scraping (protection anti-bot Servicepipe)."
+
+  - name: Vesti (Telegram)
+    url: https://t.me/s/vestiru24
+    type: telegram
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Chaine Telegram de VGTRK -- voir Rossiya 1 / Vesti."
+
+  - name: RIA Novosti - Rossiya Seychas (Telegram)
+    url: https://t.me/s/ria_novosti_russiya
+    type: telegram
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Chaine Telegram du groupe RIA Novosti/Rossiya Segodnya (rian_ru, le compte principal, a desactive l'apercu web public)."
+
+  - name: MID Russia (MAE, Telegram)
+    url: https://t.me/s/MID_Russia
+    type: telegram
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Chaine officielle du ministere russe des Affaires etrangeres."
+
+  - name: Kadyrov (Telegram)
+    url: https://t.me/s/RKadyrov_95
+    type: telegram
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Chaine personnelle de Ramzan Kadyrov, chef de la Republique tchetchene -- figure politique tres active sur Telegram, ton propagandiste et menacant recurrent."
+
+  # =========================================================
+  # Telegram -- "voenkory" (correspondants de guerre / milbloggers)
+  # Categorie absente de la presse classique : souvent plus francs et
+  # plus critiques du ministere de la Defense que les medias d'Etat,
+  # largement citee par ISW/BBC/NYT dans l'analyse du conflit.
+  # =========================================================
+
+  - name: Rybar
+    url: https://t.me/s/rybar
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Milblogger fonde par Mikhail Zvintchouk (ex-officier de presse du ministere de la Defense), la chaine pro-guerre la plus citee par les analystes occidentaux."
+
+  - name: WarGonzo
+    url: https://t.me/s/wargonzo
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Correspondant de guerre independant Semyon Pegov, couverture terrain pro-russe."
+
+  - name: Colonelcassad
+    url: https://t.me/s/boris_rozhin
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Boris Rojine, analyste militaire pro-russe, ancien blog pro-Crimee devenu chaine milblogger majeure."
+
+  - name: Kotsnews
+    url: https://t.me/s/sashakots
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Alexandre Kots, correspondant de guerre de Komsomolskaya Pravda."
+
+  - name: Voenkory Russkoy Vesny
+    url: https://t.me/s/RVvoenkor
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Chaine des correspondants de guerre du projet Russkaya Vesna ('Printemps russe'), issu du mouvement separatiste du Donbass 2014."
+
+  - name: Soloviev Live
+    url: https://t.me/s/SolovievLive
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Vladimir Soloviev, presentateur vedette de la television d'Etat, une des voix les plus virulentes de la propagande de guerre."
+
+  # =========================================================
+  # Telegram -- tabloids/agregateurs a forte audience (liens documentes
+  # avec les services de securite selon plusieurs enquetes journalistiques,
+  # sans statut officiel d'organe d'Etat)
+  # =========================================================
+
+  - name: Mash
+    url: https://t.me/s/mash
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Tabloide actualites/faits divers, un des plus gros canaux russes tous genres confondus ; liens repetes avec les fuites policieres/FSB documentes par plusieurs enquetes."
+
+  - name: Baza
+    url: https://t.me/s/bazabazon
+    type: telegram
+    media_type: independant
+    legal_status: aucun
+    historical_stance: "Tabloide investigation/faits divers, issu d'une scission de l'equipe Mash en 2019."
+
+  - name: SHOT
+    url: https://t.me/s/shot_shot
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Tabloide actualites, meme categorie que Mash/Baza (fuites policieres, faits divers, actualite chaude)."
+
+  - name: Readovka
+    url: https://t.me/s/readovkanews
+    type: telegram
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Agregateur d'actualites pro-Kremlin fonde en 2019."
+
+  # =========================================================
+  # Telegram -- medias independants/exil deja suivis (meme contenu que le
+  # site, publie plus vite ; utile en complement ou si le site est instable)
+  # =========================================================
+
+  - name: Meduza (Telegram)
+    url: https://t.me/s/meduzalive
+    type: telegram
+    media_type: exil
+    legal_status: organisation_indesirable
+    historical_stance: "Chaine Telegram de Meduza -- voir l'entree presse."
+
+  - name: TV Rain (Telegram)
+    url: https://t.me/s/tvrain
+    type: telegram
+    media_type: exil
+    legal_status: organisation_indesirable
+    historical_stance: "Chaine Telegram de TV Rain / Dozhd -- voir l'entree presse."
+
+  - name: Mediazona (Telegram)
+    url: https://t.me/s/mediazzzona
+    type: telegram
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Chaine Telegram de Mediazona -- voir l'entree presse."
+
+  - name: The Insider (Telegram)
+    url: https://t.me/s/theinsider
+    type: telegram
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Chaine Telegram de The Insider -- voir l'entree presse."
+
+  - name: iStories (Telegram)
+    url: https://t.me/s/istories_media
+    type: telegram
+    media_type: exil
+    legal_status: organisation_indesirable
+    historical_stance: "Chaine Telegram d'iStories -- voir l'entree presse."
+
+  # =========================================================
+  # YouTube -- chaines politiques russophones
+  #
+  # Collecte par les sous-titres, decoupes en segments horodates et cliquables
+  # (src/youtube_scrape.py). Biais assume : les quatre chaines les plus vues
+  # sont toutes d'opposition en exil, le pendant pro-Kremlin n'etant pas sur
+  # la plateforme. Ne pas lire ce volet comme un echantillon de la video
+  # russophone.
+  # =========================================================
+
+  - name: Maxime Kats (YouTube)
+    url: https://www.youtube.com/@Max_Katz/videos
+    type: youtube
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Ancien elu municipal moscovite passe au commentaire politique quotidien. Chaine politique russophone la plus vue (~26 M de vues/mois). Ligne liberale d'opposition, tres critique du Kremlin comme d'une partie de l'opposition. Agent etranger depuis juillet 2022, en exil."
+
+  - name: Varlamov (YouTube)
+    url: https://www.youtube.com/@varlamov/videos
+    type: youtube
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Ilia Varlamov, blogueur urbanisme et voyage devenu commentateur politique. ~15 M de vues/mois. Cofondateur avec Kats du fonds Gorodskie Proekty. Agent etranger depuis mars 2023, en exil."
+
+  - name: Chtefanov (YouTube)
+    url: https://www.youtube.com/@alexandrshtefanov/videos
+    type: youtube
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Alexandre Chtefanov, historien de formation, angle historique et social de gauche. ~10 M de vues/mois. Auteur du documentaire tourne dans les territoires occupes (2023). Agent etranger depuis aout 2023, a quitte la Russie en fevrier 2024."
+
+  - name: vDud (YouTube)
+    url: https://www.youtube.com/@vdud/videos
+    type: youtube
+    media_type: exil
+    legal_status: agent_etranger
+    historical_stance: "Iouri Doud, entretiens longs (2 a 4 h) au tres large public, souvent culturels plutot que politiques -- le volume de texte produit depasse largement sa part politique. ~6 M de vues/mois. Agent etranger depuis avril 2022."
+
+  # =========================================================
+  # Television -- talk-shows et journaux, via RuTube
+  #
+  # La TV est le premier support d'information du pays (plus d'un Russe sur
+  # deux s'y informe, 41 % de confiance contre 11 % a Telegram) : c'etait
+  # l'angle mort du corpus. RuTube est la seule plateforme ou les chaines
+  # publient officiellement, mais sans sous-titres -- Whisper transcrit en
+  # local, d'ou un nombre d'emissions volontairement restreint.
+  # =========================================================
+
+  - name: Vremya Pokazhet (Pervyi Kanal)
+    channel: Pervyi Kanal
+    url: https://rutube.ru/channel/23460655/videos/
+    type: rutube
+    program_pattern: "Время покажет"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Talk-show politique phare de Pervyi Kanal (3e chaine du pays, 7,1 % de part d'audience), diffuse en journee. Plateau de commentateurs alignes sur la ligne officielle."
+
+  - name: Bolshaya Igra (Pervyi Kanal)
+    channel: Pervyi Kanal
+    url: https://rutube.ru/channel/23460655/videos/
+    type: rutube
+    program_pattern: "Большая игра"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Talk-show de politique internationale de Pervyi Kanal, centre sur la relation avec les Etats-Unis et l'OTAN. C'est la que se formule la ligne sur l'Occident."
+
+  - name: Soloviev LIVE (RuTube)
+    channel: Soloviev LIVE
+    url: https://rutube.ru/channel/23484660/videos/
+    type: rutube
+    program_pattern: "СОЛОВЬЁВ|Соловьёв|Соловьев"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Emission de Vladimir Soloviev, la voix la plus explicite de la propagande d'Etat. Diffusee quotidiennement en format long (2 a 4 h)."
+
+  - name: Vremya (Pervyi Kanal)
+    channel: Pervyi Kanal
+    url: https://rutube.ru/channel/23460655/videos/
+    type: rutube
+    # Le motif doit exclure « Время покажет », le talk-show du meme groupe :
+    # seul le journal porte le prefixe « Выпуск программы ». Le point joker
+    # absorbe les guillemets, droits ou typographiques selon les titres.
+    program_pattern: "Выпуск программы .Время."
+    search_query: "Выпуск программы Время"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Journal de 21 h de Pervyi Kanal, le plus suivi de Russie et le programme d'information de reference depuis l'epoque sovietique. Enonce la version officielle des evenements du jour."
+
+  # =========================================================
+  # VKontakte -- communautes des grands medias (en developpement)
+  #
+  # Premier reseau social du pays. Collecte par navigateur : l'API exige un
+  # compte et les pages sont vides sans JavaScript. Liste courte a dessein --
+  # VK oppose une verification anti-robot apres une vingtaine de visites
+  # anonymes, donc deux ou trois communautes passent par run. Seuls les medias
+  # de masse figurent ici, les medias en exil etant deja pris en presse et en
+  # Telegram.
+  # =========================================================
+
+  - name: RIA Novosti (VK)
+    status: en_developpement
+    url: https://vk.com/ria
+    type: vk
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Communaute VK de RIA Novosti -- voir l'entree presse."
+
+  - name: RT (VK)
+    status: en_developpement
+    url: https://vk.com/rt_russian
+    type: vk
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Communaute VK de RT en russe -- voir l'entree presse."
+
+  - name: Komsomolskaya Pravda (VK)
+    status: en_developpement
+    url: https://vk.com/kpru
+    type: vk
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Communaute VK de Komsomolskaya Pravda, tabloide de masse -- voir l'entree presse."
+
+  - name: Mash (VK)
+    status: en_developpement
+    url: https://vk.com/mash
+    type: vk
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Communaute VK du tabloide Mash -- voir l'entree Telegram."
+
+  - name: Readovka (VK)
+    status: en_developpement
+    url: https://vk.com/readovkanews
+    type: vk
+    media_type: para_etat
+    legal_status: aucun
+    historical_stance: "Communaute VK de Readovka -- voir l'entree Telegram."
+
+  # =========================================================
+  # Rossiya 1 -- emissions phares, via interception du flux
+  #
+  # Premiere chaine du pays (13,4 % d'audience) et longtemps absente du
+  # corpus : rien d'exploitable sur RuTube, chaines YouTube retirees, et
+  # l'extracteur smotrim de yt-dlp casse. `type: hls` contourne tout ca en
+  # ecoutant le trafic du lecteur (cf. src/hls_scrape.py).
+  #
+  # `program_pattern` est indispensable : ces pages recommandent d'autres
+  # emissions et sans filtre on transcrit le voisin. « Вести недели » est
+  # ecartee, smotrim ne la publie qu'en sujets de 5 a 10 min sans date.
+  # =========================================================
+
+  - name: 60 Minut (Rossiya 1)
+    channel: Rossiya 1
+    url: https://smotrim.ru/brand/60851
+    type: hls
+    episode_pattern: '/video/\d+'
+    program_pattern: "60 минут"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Talk-show politique quotidien d'Olga Skabeeva et Evgueni Popov, deux fois par jour en semaine. Un des lieux les plus explicites du cadrage officiel."
+
+  - name: Vecher s Solovievym (Rossiya 1)
+    channel: Rossiya 1
+    url: https://smotrim.ru/brand/21385
+    type: hls
+    episode_pattern: '/video/\d+'
+    program_pattern: "Вечер с Владимиром Соловь|Вечер с Соловь"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Emission de soiree de Vladimir Soloviev sur Rossiya 1 -- a distinguer de sa chaine en ligne Soloviev LIVE, deja suivie : format et audience differents, l'antenne touchant un public sans commune mesure."
+
+  - name: Segodnya (NTV)
+    channel: NTV
+    url: https://rutube.ru/channel/23178409/videos/
+    type: rutube
+    program_pattern: "«Сегодня»"
+    search_query: "Сегодня выпуск новостей"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Journal quotidien de NTV, deuxieme chaine du pays (9,5 % de part d'audience, devant Pervyi Kanal). Groupe Gazprom-Media, ton plus sensationnaliste que Pervyi Kanal pour une meme ligne editoriale."
+
+  - name: Vypusk novostey (Pervyi Kanal)
+    channel: Pervyi Kanal
+    url: https://rutube.ru/channel/23460655/videos/
+    type: rutube
+    # Les editions intrajournalieres (9 h, 12 h, 15 h, 18 h), distinctes du
+    # journal de 21 h « Время » collecte a part. Mesure faite sur trois
+    # editions du meme jour : elles ne partagent que 15 a 24 % de leur
+    # vocabulaire, donc elles ne se repetent pas et valent d'etre collectees.
+    program_pattern: "Выпуск новостей"
+    search_query: "Выпуск новостей"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Editions intrajournalieres de Pervyi Kanal, environ 20 min chacune. Complement du journal de 21 h : chaque edition couvre largement d'autres sujets."
+
+  # =========================================================
+  # Television -- NTV et Soloviev LIVE
+  #
+  # Verifie le 15 aout 2026 : les six emissions sont publiees integralement,
+  # date dans le titre, par le compte officiel de leur chaine.
+  #
+  # A retenir de l'enquete : « Место встречи » et « Формула смысла » avaient
+  # ete classees non viables alors qu'elles etaient en relache d'ete -- pas
+  # d'episode recent ne veut pas dire pas de source. « Однако » n'est plus une
+  # emission mais une rubrique de « Время », donc deja couverte. « Антонимы »
+  # est abandonnee, plus rien depuis octobre 2025.
+  #
+  # Cout : ~20 h d'audio par semaine, soit ~1 h 30 de GPU et ~0,8 $ de
+  # Mistral. Le poste le plus lourd -- chaque entree est independante.
+  # =========================================================
+
+  - name: Mesto vstrechi (NTV)
+    channel: NTV
+    url: https://rutube.ru/channel/23178409/videos/
+    type: rutube
+    program_pattern: "Место встречи"
+    search_query: "Место встречи выпуск"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Talk-show politique quotidien de NTV (14 h, en semaine), anime par Andrei Norkine et Ivan Trouchkine. Format de plateau contradictoire ou des invites etrangers sont invites pour etre pris a partie -- le lieu le plus theatral du cadrage televise russe."
+
+  - name: Svoya Pravda (NTV)
+    channel: NTV
+    url: https://rutube.ru/channel/23178409/videos/
+    type: rutube
+    program_pattern: "Своя правда"
+    search_query: "Своя правда выпуск"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Talk-show hebdomadaire du vendredi soir sur NTV, anime par Roman Babaian. Chaque numero porte un titre thematique (« Новый фюрер Европы », « Открытый фашизм ») qui resume a lui seul la ligne."
+
+  - name: ChP (NTV)
+    channel: NTV
+    url: https://rutube.ru/channel/23178409/videos/
+    type: rutube
+    program_pattern: "«ЧП»|Чрезвычайное происшествие"
+    search_query: "ЧП Чрезвычайное происшествие"
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Journal quotidien de faits divers de NTV, ~22 min. Peu politique en apparence, mais c'est la vitrine du registre securitaire et sensationnaliste qui a fait la marque de la chaine."
+
+  - name: Segodnya v Moskve (NTV)
+    channel: NTV
+    url: https://rutube.ru/channel/23178409/videos/
+    type: rutube
+    program_pattern: "Сегодня в Москве"
+    search_query: "Сегодня в Москве"
+    # Journal court : le plancher general de 15 min l'exclurait entierement.
+    min_duration: 600
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Edition moscovite quotidienne du journal de NTV, 13 a 15 min. Angle local sur la capitale, la ou les autres sources du corpus sont nationales."
+
+  - name: Polnyi Kontakt (Soloviev LIVE)
+    channel: Soloviev LIVE
+    url: https://rutube.ru/channel/23484660/videos/
+    type: rutube
+    program_pattern: "Полный контакт"
+    search_query: "Полный контакт"
+    # Numeros entiers de ~4 h uniquement : la chaine publie aussi des extraits
+    # de 20 min sous le meme titre, qui ne feraient que dupliquer.
+    min_duration: 3600
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Matinale quotidienne de Vladimir Soloviev (avec Anna Chafran), ~4 h, diffusee simultanement sur Vesti FM. Format le plus long et le plus direct du corpus : c'est la que la ligne du jour se formule avant d'etre reprise ailleurs."
+
+  - name: Formula Smysla (Soloviev LIVE)
+    channel: Soloviev LIVE
+    url: https://rutube.ru/channel/23484660/videos/
+    type: rutube
+    program_pattern: "Формула смысла"
+    search_query: "Формула смысла"
+    min_duration: 3600
+    media_type: etat
+    legal_status: aucun
+    historical_stance: "Emission de Dmitri Koulikov (avec Guia Saralidze), ~4 h, deux fois par semaine. Registre ideologique plutot que d'actualite : c'est la doctrine (« monde russe », souverainete, critique de l'Occident) plus que l'evenement."

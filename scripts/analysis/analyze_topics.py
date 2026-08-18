@@ -31,7 +31,15 @@ MIN_CONTENT_LEN = 300
 # excluait presque tous (le scraper ecarte deja tout ce qui fait moins de
 # 50 car. a la collecte, cf. src/telegram_scrape.py).
 MIN_CONTENT_LEN_TELEGRAM = 50
-EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+# Mesure faite sur 900 documents : avec l'ancien MiniLM, deux transcriptions
+# quelconques se ressemblaient a 0,77 quand deux articles de presse ne se
+# ressemblaient qu'a 0,45 -- la video formait un bloc dense et HDBSCAN y
+# decoupait des themes par REGISTRE avant de le faire par sujet. e5-base divise
+# cet ecart par cinq. Il ne devient abordable que sur GPU (2,5 min contre 33 en
+# processeur pour 8 800 documents).
+EMBED_MODEL = "intfloat/multilingual-e5-base"
+# Les modeles e5 attendent un prefixe indiquant le role du texte.
+EMBED_PREFIXE = "passage: "
 # Longueur reellement encodee. Le defaut du modele (128) coupait la quasi
 # totalite du corpus -- cf. le commentaire dans run().
 EMBED_MAX_TOKENS = 512
@@ -41,6 +49,28 @@ NOISE_KEY = -1
 # vaut laisser un article non classe que le forcer dans un theme voisin, ce
 # qui redilue exactement la precision qu'on cherche.
 OUTLIER_THRESHOLD = 0.60
+# Particules d'oral. Le probleme n'etait pas le volume de segments par video
+# mais leur REGISTRE : l'analyse de divergence a montre que le vocabulaire
+# distinctif de YouTube est « тип, короче, вообще, наверное, мол, угу » et
+# celui de la television « действительно, собственно, значит, кстати » -- des
+# marqueurs de parole, pas des sujets. L'embedding les capte et regroupe toutes
+# les transcriptions ensemble quel que soit leur sujet. On les retire du texte
+# envoye a l'embedding (le contenu stocke, lui, n'est jamais modifie).
+_ORAL = (
+    "вот", "ну", "ага", "угу", "короче", "типа", "тип", "мол", "как бы",
+    "в общем", "собственно", "значит", "наверное", "кстати", "реально",
+    "вообще", "как-то", "что-то", "какой-то", "какая-то", "какое-то",
+    "прямо", "слушайте", "понимаете", "знаете", "так сказать", "это самое",
+    "да ладно", "действительно", "конечно", "просто",
+)
+_ORAL_RE = re.compile(
+    r"\b(?:" + "|".join(sorted(_ORAL, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE)
+
+
+def _neutraliser_oral(texte):
+    """Retire les particules de parole d'une transcription."""
+    return _ORAL_RE.sub(" ", texte)
 
 # --- Lemmatisation + stopwords pour les mots-cles de theme (c-TF-IDF) -----
 #
@@ -60,6 +90,21 @@ _PRESS_STOPWORDS = {
     "говорится", "уточнил", "уточнила", "пишет", "цитирует",
     "риа", "тасс", "рбк", "интерфакс", "ria", "tass",
     "год", "года", "году", "лет", "млн", "млрд", "тыс",
+    # La liste russe de nltk ne fait que 151 entrees et laisse passer des mots
+    # tres frequents -- "это", "наш", "который", "очень" n'y sont pas. Ils
+    # remontaient en tete des mots-cles de themes et des divergences.
+    "это", "этот", "тот", "весь", "наш", "ваш", "свой", "который", "такой",
+    "какой", "самый", "очень", "просто", "тоже", "также", "просто", "давать",
+    "сказать", "говорить", "мочь", "стать", "делать", "хотеть", "знать",
+    "думать", "видеть", "идти", "получать", "считать", "понимать", "являться",
+    "человек", "время", "дело", "вопрос", "случай", "работа", "слово",
+    # Artefacts de transcription : Whisper et les sous-titres YouTube posent
+    # ces marqueurs a la place des passages non verbaux.
+    "музыка", "аплодисменты", "смех", "аплодировать", "неразборчиво",
+    # Formules de plateforme, signatures de chaine et abreviations de date
+    # ramassees par l'extraction.
+    "подписаться", "подписываться", "подписывайтесь", "telegram", "канал",
+    "видео", "смотреть", "читать", "источник", "фото", "авг", "сен", "окт",
 }
 _TOKEN_RE = re.compile(r"[a-zA-Zа-яёА-ЯЁ][a-zA-Zа-яёА-ЯЁ\-']{2,}")
 
@@ -83,7 +128,7 @@ def _load_stopwords():
 def _lemmatize(word):
     lemma = _lemma_cache.get(word)
     if lemma is None:
-        lemma = _morph.parse(word)[0].normal_form
+        lemma = _morph.parse(word)[0].normal_form.replace("ё", "е")
         _lemma_cache[word] = lemma
     return lemma
 
@@ -101,6 +146,10 @@ def _lemmatizing_tokenizer(text):
 
     tokens = []
     for raw in _TOKEN_RE.findall(text.lower()):
+        # e/e trema : nltk ecrit "все" et "еще", les textes ecrivent souvent
+        # "всё" et "ещё". Sans cette normalisation les mots vides passaient au
+        # travers du filtre et arrivaient en tete des mots-cles.
+        raw = raw.replace("ё", "е")
         if raw in _stopwords:
             continue
         lemma = _lemmatize(raw)
@@ -230,9 +279,17 @@ def run(window_days: int = 30, min_topic_size: int = 15, threshold: float = 0.62
     ensure_schema(conn, reset=reset)
 
     window_start = date.today() - timedelta(days=window_days)
+    # L'unite parente se relit dans l'URL : tous les segments d'une meme video
+    # ou d'une meme emission la partagent.
     rows = conn.execute(
         """
-        SELECT id, content, title FROM articles
+        SELECT id, content, title,
+               CASE WHEN source_kind = 'youtube'
+                    THEN regexp_extract(url, 'v=([A-Za-z0-9_-]+)', 1)
+                    WHEN source_kind = 'tv'
+                    THEN regexp_extract(url, 'video/([A-Za-z0-9]+)', 1)
+                    ELSE id END AS parent
+        FROM articles
         WHERE content IS NOT NULL
           AND LENGTH(content) >= (CASE WHEN source_kind = 'telegram' THEN ? ELSE ? END)
           AND language = 'ru' AND published_at >= ?
@@ -250,6 +307,10 @@ def run(window_days: int = 30, min_topic_size: int = 15, threshold: float = 0.62
     docs = [r[1] for r in rows]
     titles = [r[2] or "" for r in rows]
 
+    n_video = sum(1 for r in rows if r[3] != r[0])
+    log.info("Dont %d segments de video ou d'emission, dont on neutralise "
+             "les marqueurs d'oral avant l'embedding", n_video)
+
     log.info("Chargement embedding model...")
     embed = SentenceTransformer(EMBED_MODEL)
     # Le defaut du modele est 128 tokens, ce qui tronquait 92 % des articles :
@@ -258,7 +319,11 @@ def run(window_days: int = 30, min_topic_size: int = 15, threshold: float = 0.62
     # vraiment les vecteurs (0,55 de similarite avec les tronques) et coute
     # ~11 min au lieu de 4 sur ce corpus.
     embed.max_seq_length = EMBED_MAX_TOKENS
-    embeddings = embed.encode(docs, show_progress_bar=True)
+    # Le texte encode est nettoye de ses particules d'oral ; `docs` reste
+    # intact pour le c-TF-IDF et les exemples affiches.
+    embeddings = embed.encode(
+        [EMBED_PREFIXE + _neutraliser_oral(d) for d in docs],
+        show_progress_bar=True, normalize_embeddings=True)
 
     vectorizer = CountVectorizer(
         tokenizer=_lemmatizing_tokenizer,
@@ -309,6 +374,28 @@ def run(window_days: int = 30, min_topic_size: int = 15, threshold: float = 0.62
                  "deciles 10/25/50/75/90 = %s", len(idx_isoles),
                  " / ".join(f"{v:.2f}" for v in
                             np.percentile(proches, [10, 25, 50, 75, 90])))
+
+        # Le seuil se lit sur les documents DEJA classes plutot que d'etre fixe
+        # en dur : chaque modele d'embedding a sa propre echelle de similarite
+        # (MiniLM s'etale de 0,3 a 1,0, e5 se tasse entre 0,75 et 0,90), et un
+        # seuil absolu rattachait tout avec l'un et rien avec l'autre. Regle
+        # retenue : un isole rejoint un theme s'il en est au moins aussi proche
+        # que le quart le plus faible de ses membres actuels.
+        idx_classes = [i for i, t in enumerate(bertopic_ids) if t != NOISE_KEY]
+        if idx_classes:
+            rang_par_topic = {t: j for j, t in enumerate(
+                [rangs[j] for j in vrais])}
+            sims_classes = _cosine_sim_matrix(
+                np.asarray(embeddings)[idx_classes],
+                np.asarray(model.topic_embeddings_)[vrais])
+            propres = [sims_classes[n, rang_par_topic[bertopic_ids[i]]]
+                       for n, i in enumerate(idx_classes)
+                       if bertopic_ids[i] in rang_par_topic]
+            if propres:
+                outlier_threshold = float(np.percentile(propres, 25))
+                log.info("Seuil de rattachement deduit des documents classes : "
+                         "%.2f (1er quartile de leur proximite a leur propre "
+                         "theme)", outlier_threshold)
 
     avant = len(idx_isoles)
     bertopic_ids = model.reduce_outliers(

@@ -226,6 +226,79 @@ def cols_article(**extra):
     return cfg
 
 
+# Axe binaire, par-dessus les quatre familles. « independant » ne comptait
+# qu'une source pour 102 documents : comme categorie intermediaire il ne
+# separait rien, et une ponderation a parts egales lui donnait un quart du
+# resultat. Regroupe en deux blocs, il rejoint le camp non aligne.
+#
+# Denomination reprise de la litterature plutot qu'inventee : sur les treize
+# papiers de Bibliography/, « state media » (42 occurrences), « pro-government »
+# (26), « pro-Kremlin » (23) et « state-controlled » (21) designent le premier
+# bloc. Pour le second, « independent media » (6) l'emporte largement sur
+# « anti-Kremlin » (1) -- ces medias se definissent par leur independance, pas
+# par leur opposition.
+BLOC_SQL = ("CASE WHEN {a}.type_media IN ('etat', 'para_etat') "
+            "THEN 'aligne_etat' ELSE 'independant_exil' END")
+BLOC_LABEL = {"aligne_etat": "Aligne sur l'Etat",
+              "independant_exil": "Independant / exil"}
+
+# Schemas de ponderation. Le corpus est un echantillon de commodite : on
+# collecte ce qui est collectable, pas un tirage representatif. Trois biais s'y
+# superposent -- la composition (73 % de segments pro-Kremlin contre 26 %
+# d'exil), la domination de volume (un rapport de 1 a 85 entre sources d'une
+# meme famille), et l'incommensurabilite des unites. Ponderer ne cree aucune
+# information : cela redistribue le poids des documents pour repondre a une
+# question precise, au prix d'une variance plus grande -- que l'on chiffre par
+# la taille effective d'echantillon.
+PONDERATIONS = {
+    "Brut": ("Ce que contient le corpus. Chaque document compte pour un : "
+             "les sources prolifiques dominent.", "CAST(1.0 AS DOUBLE)"),
+    "Un media = une voix": (
+        "Chaque source pese autant, quel que soit son volume. Repond a "
+        "« que disent les medias suivis ? » plutot qu'a « qu'a-t-on lu ? ».",
+        "1.0 / CAST(COUNT(*) OVER (PARTITION BY {a}.source_name) AS DOUBLE)"),
+    "Familles a parts egales": (
+        "Etat, para-etat, independant et exil pesent autant. Repond a "
+        "« qu'est-ce qui separe les camps ? », en neutralisant leur poids "
+        "respectif dans la collecte.",
+        "1.0 / CAST(COUNT(*) OVER (PARTITION BY COALESCE({a}.type_media, 'inconnu')) AS DOUBLE)"),
+    "Deux blocs a parts egales": (
+        "Medias alignes sur l'Etat d'un cote, independants et en exil de "
+        "l'autre, a 50/50. La comparaison la plus lisible entre les deux "
+        "camps, et celle qui evite qu'une famille minuscule prenne le quart "
+        "du resultat.",
+        "1.0 / CAST(COUNT(*) OVER (PARTITION BY CASE WHEN {a}.type_media "
+        "IN ('etat', 'para_etat') THEN 'aligne_etat' ELSE 'independant_exil' "
+        "END) AS DOUBLE)"),
+    "Familles egales, medias egaux": (
+        "Les deux corrections a la fois : chaque source pese autant au sein "
+        "de sa famille, et chaque famille autant que les autres.",
+        "1.0 / CAST(COUNT(*) OVER (PARTITION BY {a}.source_name) * "
+        "COUNT(DISTINCT {a}.source_name) OVER "
+        "(PARTITION BY COALESCE({a}.type_media, 'inconnu')) AS DOUBLE)"),
+}
+
+
+def poids_sql(schema, alias="a"):
+    """Expression SQL du poids d'un document. A placer dans une CTE : les
+    fonctions de fenetre ne s'imbriquent pas dans une agregation."""
+    return PONDERATIONS[schema][1].format(a=alias)
+
+
+def taille_effective(poids):
+    """Taille effective d'echantillon (Kish) : (somme w)^2 / somme(w^2).
+
+    Ce que la ponderation coute. Si un petit groupe recoit un poids enorme,
+    la moyenne ponderee repose en pratique sur peu de documents, et le nombre
+    brut de lignes ne le dit pas."""
+    import numpy as _np
+    w = _np.asarray(poids, dtype=float)
+    w = w[w > 0]
+    if not len(w):
+        return 0
+    return float(w.sum() ** 2 / (w ** 2).sum())
+
+
 def col_entier(serie):
     """Colonne d'entiers pour st.dataframe, case vide quand la donnee manque.
 
@@ -268,7 +341,8 @@ TARGET_LABELS = {
 TARGET_COORDS = {
     "ukraine": (50.45, 30.52), "etats_unis": (38.91, -77.04),
     "union_europeenne": (47.0, 8.0),      # au sud de Bruxelles, pour degager
-    "otan": (53.5, -2.0),                 # decale vers la mer du Nord
+    "otan": (45.0, -30.0),                # en plein Atlantique : l'alliance
+                                          # n'est pas un pays, et ca degage l'Europe
     "allemagne": (52.52, 13.40), "france": (46.5, -1.5),
     "pays_baltes": (57.5, 24.1), "chine": (39.90, 116.41),
     "inde": (28.61, 77.21),
@@ -583,6 +657,11 @@ tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
 # tables restent en base mais plus rien ne les lit.
 has_target_sent = "article_target_sentiment" in tables
 has_topics = "topics" in tables and "article_topics" in tables
+# Analyses issues des travaux de recherche (cf. Bibliography/). Chacune est
+# facultative : sans sa table, la section correspondante disparait.
+has_divergence = "lexical_divergence" in tables
+has_techniques = "article_techniques" in tables
+has_topic_quality = "topic_quality" in tables
 has_geo = "entity_geo" in tables
 
 
@@ -684,6 +763,12 @@ with st.sidebar:
              "du week-end, tres marque dans la presse d'agence.")
     GRAIN = _grains[_grain_choisi]
     GRAIN_LABEL = _grain_choisi
+
+    PONDERATION = st.selectbox(
+        "Ponderation", list(PONDERATIONS), index=0, key="f_ponderation",
+        help="Corrige la composition du corpus. Voir la note sous le "
+             "graphique des themes pour ce que chaque choix signifie.")
+    st.caption(PONDERATIONS[PONDERATION][0])
 
 where = ["1 = 1"]
 params: list = []
@@ -1028,7 +1113,8 @@ with tab_themes:
                 with cm3:
                     split_choice = st.selectbox(
                         "Repartir par",
-                        ["Nature du contenu", "Type de media", "Media", "Aucune"],
+                        ["Nature du contenu", "Bloc", "Type de media", "Media",
+                         "Aucune"],
                         index=0, key="theme_split",
                         help="Decompose chaque barre. « Media » distingue les "
                              "sources une a une : lisible surtout apres avoir "
@@ -1036,6 +1122,7 @@ with tab_themes:
                     )
 
                 SPLIT_COL = {"Nature du contenu": "COALESCE(a.source_kind, 'press')",
+                             "Bloc": BLOC_SQL.format(a="a"),
                              "Type de media": "COALESCE(a.type_media, 'inconnu')",
                              "Media": "a.source_name",
                              "Aucune": "'Tous'"}[split_choice]
@@ -1046,19 +1133,42 @@ with tab_themes:
                 denom_n, denom_chars = conn.execute(
                     f"SELECT COUNT(*), COALESCE(SUM(LENGTH(a.content)), 0) "
                     f"FROM articles a WHERE {aw}", params).fetchone()
-                denom_n = denom_n or 1
-                denom_chars = denom_chars or 1
+                denom_n = float(denom_n or 1)
+                denom_chars = float(denom_chars or 1)
 
+                # Le poids se calcule sur le corpus FILTRE entier, pas sur les
+                # seuls segments classes : sinon un theme absent d'une famille
+                # ferait varier le poids des autres.
+                W = poids_sql(PONDERATION)
                 df_tk = conn.execute(
-                    f"""SELECT t.topic_key, t.label,
-                               {SPLIT_COL} AS decoupe,
-                               COUNT(*) AS n, COALESCE(SUM(LENGTH(a.content)), 0) AS chars
-                    FROM topics t
-                    JOIN article_topics at_ ON at_.topic_key = t.topic_key
-                    JOIN articles a ON a.id = at_.article_id
-                    WHERE t.active AND t.topic_key != -1 AND {aw}
-                    GROUP BY t.topic_key, t.label, decoupe""",
+                    f"""WITH pesee AS (
+                            SELECT a.id, {SPLIT_COL} AS decoupe,
+                                   LENGTH(a.content) AS chars, {W} AS w
+                            FROM articles a WHERE {aw}
+                        )
+                        SELECT t.topic_key, t.label, p.decoupe,
+                               CAST(SUM(p.w) AS DOUBLE) AS n,
+                               CAST(COALESCE(SUM(p.w * p.chars), 0) AS DOUBLE) AS chars
+                        FROM topics t
+                        JOIN article_topics at_ ON at_.topic_key = t.topic_key
+                        JOIN pesee p ON p.id = at_.article_id
+                        WHERE t.active AND t.topic_key != -1
+                        GROUP BY t.topic_key, t.label, p.decoupe""",
                     params).df()
+
+                # Denominateurs ponderes de la meme facon, sinon les parts ne
+                # sommeraient plus a 100 %.
+                denom_n, denom_chars, n_eff = conn.execute(
+                    f"""WITH pesee AS (
+                            SELECT LENGTH(a.content) AS chars, {W} AS w
+                            FROM articles a WHERE {aw}
+                        )
+                        SELECT CAST(SUM(w) AS DOUBLE),
+                               CAST(COALESCE(SUM(w * chars), 0) AS DOUBLE),
+                               CAST(POWER(SUM(w), 2) / NULLIF(SUM(w * w), 0) AS DOUBLE)
+                        FROM pesee""", params).fetchone()
+                denom_n = float(denom_n or 1)
+                denom_chars = float(denom_chars or 1)
 
                 raw_col = "n" if unit_choice == "Segments" else "chars"
                 denom = denom_n if unit_choice == "Segments" else denom_chars
@@ -1070,6 +1180,61 @@ with tab_themes:
                     df_tk["val"] = 100 * df_tk[raw_col] / denom
                     x_label = ("% des segments du corpus" if unit_choice == "Segments"
                                else "% du volume de texte du corpus")
+
+                if PONDERATION != "Brut":
+                    n_brut = conn.execute(
+                        f"SELECT COUNT(*) FROM articles a WHERE {aw}",
+                        params).fetchone()[0] or 1
+                    perte = 100 * (1 - (n_eff or 0) / n_brut)
+                    st.caption(
+                        f"**Ponderation « {PONDERATION} ».** "
+                        f"{PONDERATIONS[PONDERATION][0]} "
+                        f"Taille effective d'echantillon : **{int(n_eff or 0)}** "
+                        f"documents sur {n_brut} collectes, soit {perte:.0f} % "
+                        f"de precision en moins. Ponderer ne cree pas "
+                        f"d'information : cela redistribue le poids pour "
+                        f"repondre a une autre question, au prix de la variance."
+                    )
+                    if (n_eff or 0) < 100:
+                        st.warning(
+                            "Taille effective inferieure a 100 : ces "
+                            "proportions reposent en pratique sur trop peu de "
+                            "documents pour etre conclusives.")
+
+                    # Une famille remontee a parts egales alors qu'elle repose
+                    # sur une poignee de documents devient le point faible de
+                    # tout le graphique : on la nomme au lieu de la noyer.
+                    df_strates = conn.execute(
+                        f"""WITH pesee AS (
+                                SELECT CASE WHEN '{PONDERATION}' LIKE '%blocs%'
+                                            THEN {BLOC_SQL.format(a="a")}
+                                            ELSE COALESCE(a.type_media, 'inconnu')
+                                       END AS strate,
+                                       a.source_name, {W} AS w
+                                FROM articles a WHERE {aw}
+                            )
+                            SELECT strate, COUNT(*) AS docs,
+                                   COUNT(DISTINCT source_name) AS sources,
+                                   100 * SUM(w) / (SELECT SUM(w) FROM pesee) AS part
+                            FROM pesee GROUP BY 1 ORDER BY part DESC""",
+                        params).df()
+                    fragiles = df_strates[(df_strates["part"] >= 10) &
+                                          ((df_strates["sources"] < 3) |
+                                           (df_strates["docs"] < 200))]
+                    for _, r in fragiles.iterrows():
+                        st.warning(
+                            f"**{r['strate']}** pese {r['part']:.0f} % du "
+                            f"resultat avec seulement {int(r['docs'])} documents "
+                            f"issus de {int(r['sources'])} source(s). Cette "
+                            f"famille tire tout le graphique : ajoutez-y des "
+                            f"sources avant de conclure, ou revenez au brut.")
+                    with st.expander("Composition apres ponderation"):
+                        st.dataframe(
+                            df_strates.assign(
+                                part=df_strates["part"].round(1)).rename(columns={
+                                "strate": "Famille", "docs": "Documents",
+                                "sources": "Sources", "part": "Poids (%)"}),
+                            width="stretch", hide_index=True)
 
                 theme_order = (
                     df_tk.groupby("label")["val"].sum()
@@ -1150,6 +1315,64 @@ with tab_themes:
                     column_config={
                         c: st.column_config.DateColumn(c, format="DD/MM/YYYY")
                         for c in ("Vu depuis", "Vu jusqu'a")})
+
+        # --- Qualite des clusters (protocole ProxAnn) ---------------------
+        if has_topic_quality:
+            df_q = conn.execute(
+                """SELECT topic_key, categorie, coherence, distinction
+                   FROM topic_quality
+                   WHERE run_date = (SELECT MAX(run_date) FROM topic_quality)"""
+            ).df()
+            if not df_q.empty:
+                st.markdown("---")
+                st.subheader("Qualite des themes")
+                st.caption(
+                    "Protocole ProxAnn (Hoyle et al., 2025) : un modele deduit "
+                    "une categorie a partir de quelques articles du theme, puis "
+                    "on verifie qu'elle accepte d'autres articles du meme theme "
+                    "(**coherence**) et qu'elle rejette ceux des autres themes "
+                    "(**distinction**). Un fourre-tout se reconnait a une "
+                    "coherence haute avec une distinction basse : sa definition "
+                    "est si large qu'elle prend tout."
+                )
+                df_q = df_q.merge(
+                    df_t[["topic_key", "label", "n"]], on="topic_key", how="left")
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Coherence moyenne", f"{df_q['coherence'].mean():.2f}")
+                k2.metric("Distinction moyenne", f"{df_q['distinction'].mean():.2f}")
+                faibles = int(((df_q["coherence"] < 0.5) |
+                               (df_q["distinction"] < 0.5)).sum())
+                k3.metric("Themes fragiles", f"{faibles} / {len(df_q)}",
+                          "coherence ou distinction < 0,5", delta_color="off")
+
+                fig = px.scatter(
+                    df_q, x="coherence", y="distinction", size="n",
+                    hover_name="label",
+                    hover_data={"categorie": True, "n": True,
+                                "coherence": ":.2f", "distinction": ":.2f"},
+                    labels={"coherence": "Coherence", "distinction": "Distinction"})
+                fig.update_traces(marker=dict(color="#4C9AFF", opacity=0.75,
+                                              line=dict(width=1, color="#161A23")))
+                # Les quadrants donnent la lecture : en haut a droite les themes
+                # nets, en bas a droite les fourre-tout.
+                fig.add_hline(y=0.5, line_dash="dot", line_color=MUTED)
+                fig.add_vline(x=0.5, line_dash="dot", line_color=MUTED)
+                fig.update_xaxes(range=[-0.05, 1.05])
+                fig.update_yaxes(range=[-0.05, 1.05])
+                style(fig, 430)
+                st.plotly_chart(fig, width="stretch", key=_next_chart_key())
+
+                with st.expander("Themes les plus fragiles"):
+                    faible = df_q[(df_q["coherence"] < 0.5) |
+                                  (df_q["distinction"] < 0.5)].copy()
+                    faible = faible.sort_values(["coherence", "distinction"])
+                    st.dataframe(
+                        faible[["label", "n", "coherence", "distinction",
+                                "categorie"]].rename(columns={
+                            "label": "Theme", "n": "Segments",
+                            "coherence": "Coherence", "distinction": "Distinction",
+                            "categorie": "Categorie deduite"}),
+                        width="stretch", hide_index=True)
 
         st.subheader("Explorer un theme")
         all_ids = df_t[df_t["n"] > 0]["topic_key"].tolist()
@@ -1457,7 +1680,8 @@ with tab_sentiment:
             max_m = max(df_map_data["mentions"].max(), 1)
             sizeref_val = 2.0 * max_m / (42 ** 2)  # diametre max en pixels ; au-dela
             # les bulles europeennes se recouvrent et masquent les etiquettes
-            max_pro = max(df_map_data["pro"].max(), 1)
+        
+            amplitude = max(df_map_data["lean_avg"].abs().max(), 0.1)
 
             fig = go.Figure()
 
@@ -1472,11 +1696,33 @@ with tab_sentiment:
                 marker=dict(
                     size=df_map_data["mentions"],
                     sizemode="area", sizeref=sizeref_val, sizemin=4,
-                    color=df_map_data["pro"], colorscale="Reds",
-                    cmin=0, cmax=max_pro,
+                    # Echelle divergente sur l'orientation moyenne, pas sur le
+                    # NOMBRE d'articles favorables : ce dernier suit le volume de
+                    # mentions, si bien qu'une cible tres commentee paraissait
+                    # bienveillamment traitee meme quand le solde etait hostile
+                    # (l'opposition en exil : 286 favorables, 439 defavorables).
+                    # Memes couleurs que les camemberts de posture, gris neutre
+                    # au centre.
+                    color=df_map_data["lean_avg"],
+                    # Rampe strictement lineaire : l'intensite doit rester
+                    # proportionnelle a l'ecart a zero. Avec des paliers
+                    # intermediaires, un +0,27 tombait juste sous le palier bleu
+                    # vif et paraissait aussi marque qu'un -0,72 en rouge. Le
+                    # bleu doit etre pale ici, parce que la bienveillance
+                    # maximale du corpus est trois fois plus faible que
+                    # l'hostilite maximale.
+                    colorscale=[[0.0, "#C0392B"], [0.5, "#8A8F98"],
+                                [1.0, "#1B5FBF"]],
+                    # Bornes calees sur l'amplitude observee et non sur [-1, 1] :
+                    # les orientations reelles tiennent entre -0,72 et +0,27, si
+                    # bien qu'une echelle theorique laissait tout le monde pale.
+                    # Symetrique pour que le gris reste exactement sur zero.
+                    cmin=-amplitude, cmax=amplitude,
                     line=dict(width=1.5, color="white"), opacity=0.85,
                     showscale=True,
-                    colorbar=dict(title="Articles<br>pro", thickness=15, len=0.5,
+                    colorbar=dict(title="Orientation", thickness=15, len=0.55,
+                                  tickvals=[-amplitude, 0, amplitude],
+                                  ticktext=["hostile", "neutre", "favorable"],
                                   tickfont=dict(size=13), title_font=dict(size=13)),
                 ),
                 # Le nom seul : les chiffres sous chaque bulle faisaient deux
@@ -1521,6 +1767,21 @@ with tab_sentiment:
             fig.update_layout(showlegend=False)
             style(fig, 750)
             st.plotly_chart(fig, width="stretch", key=_next_chart_key())
+            # On affiche la valeur SIGNEE de l'acteur extreme, pas l'amplitude :
+            # OTAN est a -0,56 et l'imprimer en +0,56 laissait croire a un
+            # traitement favorable.
+            _i_extreme = df_map_data["lean_avg"].abs().idxmax()
+            _extreme = df_map_data.loc[_i_extreme, "label"]
+            _val_extreme = df_map_data.loc[_i_extreme, "lean_avg"]
+            st.caption(
+                f"**Seule la couleur est mise a l'echelle**, relativement aux "
+                f"acteurs affiches : « {_extreme} », le plus marque d'entre eux "
+                f"({_val_extreme:+.2f}), sature la teinte, et les autres se "
+                f"placent en proportion. L'echelle se recalcule donc quand les "
+                f"filtres changent le corpus, et les cibles suivies sans "
+                f"position sur la carte n'y entrent pas. La **taille** des "
+                f"bulles, elle, reste le nombre de mentions."
+            )
 
             st.markdown("**Synthese chiffree par acteur**")
             df_table = df_map_data[["label", "pro", "anti", "mentions", "lean_avg"]].copy()
@@ -2439,6 +2700,124 @@ with tab_cadrage:
                     fig.update_yaxes(autorange="reversed")
                     style(fig, max(300, 32 * len(df_src_term)))
                     st.plotly_chart(fig, width="stretch", key=_next_chart_key())
+
+    # --- Ce qui distingue chaque famille de medias -----------------------
+    # Divergence de Kullback-Leibler, d'apres Vestel & Degaetano-Ortlieb
+    # (ICWSM 2025). Repond au defaut des agregats melanges : ici on n'additionne
+    # jamais les familles, on les oppose.
+    if has_divergence:
+        st.markdown("---")
+        st.subheader("Ce qui distingue chaque famille de medias")
+        st.caption(
+            "Les mots qui rendent un groupe reconnaissable face a tous les "
+            "autres, mesures par divergence de Kullback-Leibler. A la "
+            "difference des graphiques qui melangent les sources, cette vue "
+            "est contrastive par construction : elle ne calcule pas une "
+            "moyenne du corpus, elle oppose des groupes. Un mot n'est retenu "
+            "que s'il est employe par plusieurs sources du groupe."
+        )
+        c_axe, c_grp = st.columns([1, 2])
+        with c_axe:
+            axe = st.radio("Comparer par", ["type_media", "source_kind"],
+                           format_func=lambda a: {"type_media": "Type de media",
+                                                  "source_kind": "Nature du contenu"}[a],
+                           key="div_axe", horizontal=True)
+        groupes = conn.execute(
+            "SELECT DISTINCT groupe FROM lexical_divergence WHERE axe = ? "
+            "ORDER BY groupe", [axe]).df()["groupe"].tolist()
+        with c_grp:
+            groupe = st.selectbox("Groupe", groupes, key="div_groupe")
+
+        df_div = conn.execute(
+            """SELECT token, contribution, freq_groupe, freq_reste, n_groupe
+               FROM lexical_divergence WHERE axe = ? AND groupe = ?
+               ORDER BY rang LIMIT 25""", [axe, groupe]).df()
+        if df_div.empty:
+            st.info("Aucun mot distinctif pour ce groupe.")
+        else:
+            df_div["rapport"] = (df_div["freq_groupe"] /
+                                 df_div["freq_reste"].clip(lower=0.01))
+            fig = px.bar(df_div.iloc[::-1], x="contribution", y="token",
+                         orientation="h", color="contribution",
+                         color_continuous_scale="Tealgrn",
+                         hover_data={"freq_groupe": ":.2f", "freq_reste": ":.2f",
+                                     "rapport": ":.1f", "n_groupe": True,
+                                     "contribution": False},
+                         labels={"contribution": "Contribution a la divergence",
+                                 "token": ""})
+            fig.update_layout(coloraxis_showscale=False)
+            # 30 px par barre : en dessous, Plotly masque un libelle sur
+            # deux et la moitie du vocabulaire devient invisible.
+            style(fig, max(420, 30 * len(df_div)))
+            st.plotly_chart(fig, width="stretch", key=_next_chart_key())
+            st.caption(
+                "Au survol : frequence pour 10 000 mots dans le groupe et "
+                "hors du groupe, et leur rapport. Les noms propres de medias "
+                "et les formules de plateforme survivent parfois au filtrage "
+                "-- ils sont distinctifs sans rien dire du discours."
+            )
+
+    # --- Procedes de persuasion ------------------------------------------
+    # Taxonomie de Da San Martino et al. (EMNLP 2019), grille des plateaux de
+    # Gulenko (2021). Les themes disent de quoi on parle, le sentiment envers
+    # qui on penche ; ceci dit comment le texte cherche a convaincre.
+    if has_techniques:
+        st.markdown("---")
+        st.subheader("Procedes de persuasion")
+        st.caption(
+            "Reperage des procedes rhetoriques, fragment par fragment. "
+            "Analyse limitee a la television et a YouTube, la ou le cadrage "
+            "est explicite. **Un procede n'est pas un mensonge** : c'est une "
+            "forme d'argumentation, et un media peut l'employer sur un fait "
+            "exact."
+        )
+        df_tech = conn.execute(
+            f"""SELECT t.technique, a.source_kind, a.type_media, COUNT(*) AS n
+                FROM article_techniques t JOIN articles a ON a.id = t.article_id
+                WHERE {aw} GROUP BY 1, 2, 3""", params).df()
+        if df_tech.empty:
+            st.info("Aucun procede releve sur la periode et les filtres choisis.")
+        else:
+            base = conn.execute(
+                f"""SELECT a.source_kind, COUNT(*) AS n FROM articles a
+                    WHERE {aw} AND a.source_kind IN ('tv', 'youtube')
+                    GROUP BY 1""", params).df()
+            denom = dict(zip(base["source_kind"], base["n"]))
+            df_tech["nature"] = df_tech["source_kind"].map(
+                lambda k: UNITE_NATURE.get(k, k))
+            # Un taux, pas un effectif : la TV et YouTube n'ont pas le meme
+            # nombre de segments, les comparer en brut serait trompeur.
+            df_tech["pour_100"] = df_tech.apply(
+                lambda r: 100 * r["n"] / max(denom.get(r["source_kind"], 1), 1),
+                axis=1)
+            agg = df_tech.groupby(["technique", "nature"], as_index=False)[
+                "pour_100"].sum()
+            ordre = (agg.groupby("technique")["pour_100"].sum()
+                     .sort_values().index.tolist())
+            fig = px.bar(agg, x="pour_100", y="technique", color="nature",
+                         orientation="h", barmode="group",
+                         category_orders={"technique": ordre},
+                         color_discrete_sequence=TOP_PALETTE,
+                         labels={"pour_100": "Segments concernes (%)",
+                                 "technique": "", "nature": ""})
+            style(fig, max(420, 26 * len(ordre)))
+            st.plotly_chart(fig, width="stretch", key=_next_chart_key())
+
+            with st.expander("Voir des exemples releves"):
+                tech_choisie = st.selectbox(
+                    "Procede", sorted(agg["technique"].unique()), key="tech_ex")
+                df_ex = conn.execute(
+                    f"""SELECT a.source_name, a.title, t.extrait, t.confiance, a.url
+                        FROM article_techniques t
+                        JOIN articles a ON a.id = t.article_id
+                        WHERE t.technique = ? AND {aw}
+                        ORDER BY t.confiance DESC LIMIT 15""",
+                    [tech_choisie, *params]).df()
+                st.dataframe(df_ex, width="stretch", hide_index=True,
+                             column_config=cols_article())
+                st.caption(
+                    "L'extrait cite est le fragment sur lequel le modele "
+                    "s'appuie : il permet de verifier chaque relevé.")
 
 
 # ===== Tab Contexte (paysage mediatique russe) ==========================

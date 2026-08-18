@@ -59,4 +59,36 @@ dependencies = [
     # --- Configuration .env (si chargement automatique active) ---
     "python-dotenv>=1.0",
     "pip-system-certs>=5.3",
+    # Navigateur sans interface : indispensable a src/vk_scrape.py (l'API VK
+    # exige un compte) et a src/hls_scrape.py (interception du flux des
+    # chaines de television). Il etait installe a la main et absent d'ici, si
+    # bien qu'un `uv sync` le retirait et cassait ces deux collecteurs sans
+    # message d'erreur avant la collecte suivante.
+    "playwright>=1.40",
+    # Declare explicitement pour pouvoir imposer la variante CUDA ci-dessous.
+    # Sans cette ligne, torch arrivait en dependance transitive de
+    # sentence-transformers et la resolution choisissait la roue CPU.
+    "torch>=2.6",
+]
+
+# --- torch en version CUDA -------------------------------------------------
+# L'index public de PyPI ne sert que des roues torch CPU. Les embeddings de
+# analyze_topics.py tournaient donc sur processeur (9 min pour 8 800 documents
+# avec MiniLM, 33 min avec e5-base) alors que la machine a une carte NVIDIA
+# deja utilisee par faster-whisper.
+#
+# A declarer ici et pas via `uv pip install` : `uv run` resynchronise
+# l'environnement depuis uv.lock avant chaque execution, et defaisait donc
+# l'installation manuelle a la commande suivante.
+#
+# `explicit = true` : cet index ne sert QUE pour torch, il ne devient pas une
+# source pour le reste des dependances.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
 ]

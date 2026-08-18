@@ -38,6 +38,20 @@ STEPS_ANALYSES = [
     ("Extraction auteurs", f"{PY} scripts/analysis/extract_authors.py"),
     ("Sentiment multi-cibles", f"{PY} scripts/analysis/analyze_sentiment_multi_mistral.py"),
     ("Themes (clustering)", f"{PY} scripts/analysis/analyze_topics.py"),
+    # Purement calculatoire, aucun appel d'API : sa place est dans la routine.
+    ("Divergence lexicale", f"{PY} scripts/analysis/analyze_divergence.py"),
+]
+
+# Analyses facultatives, payantes, hors routine quotidienne. La validation des
+# themes est un diagnostic qu'on relance apres un changement de parametres, pas
+# tous les jours ; les procedes rhetoriques coutent l'ordre de grandeur du
+# sentiment. Options explicites plutot qu'un cout qui grimpe sans qu'on le voie.
+STEPS_VALIDATION = [
+    ("Validation des themes (ProxAnn)", f"{PY} scripts/analysis/validate_topics.py"),
+]
+
+STEPS_TECHNIQUES = [
+    ("Procedes de persuasion", f"{PY} scripts/analysis/analyze_techniques_mistral.py"),
 ]
 
 STEPS_DIAG = [
@@ -86,6 +100,10 @@ def main():
     ap.add_argument("--skip-pipeline", action="store_true")
     ap.add_argument("--skip-refetch", action="store_true")
     ap.add_argument("--skip-analyses", action="store_true")
+    ap.add_argument("--with-validation", action="store_true",
+                    help="evalue la qualite des themes (~0,16 $)")
+    ap.add_argument("--with-techniques", action="store_true",
+                    help="releve les procedes rhetoriques sur TV et YouTube")
     ap.add_argument("--dashboard", action="store_true")
     args = ap.parse_args()
 
@@ -98,6 +116,10 @@ def main():
         steps += STEPS_REFETCH
     if not args.skip_analyses:
         steps += STEPS_ANALYSES
+    if args.with_validation:
+        steps += STEPS_VALIDATION
+    if args.with_techniques:
+        steps += STEPS_TECHNIQUES
     steps += STEPS_DIAG
 
     banner(f"ROUTINE RUSSIA-MONITOR ({len(steps)} etapes)")

@@ -8,7 +8,27 @@ Neuf onglets : volumes et couverture, signaux de rupture, thèmes, sentiment gé
 
 ![Carte d'influence](assets/carte-influence.png)
 
-La carte d'influence situe seize acteurs géopolitiques : taille selon le nombre de mentions, couleur selon le nombre d'articles favorables.
+La carte d'influence situe seize acteurs géopolitiques : taille selon le nombre de mentions, couleur selon l'orientation moyenne du traitement. L'échelle de couleur est relative aux acteurs affichés — le plus marqué d'entre eux sature la teinte, les autres se placent en proportion.
+
+![Répartition des thèmes](assets/themes.png)
+
+Les thèmes ne sont pas une liste écrite à la main mais des clusters détectés dans les articles ; chaque barre se décompose par nature de contenu, et une pondération permet de corriger la composition du corpus.
+
+![Qualité des thèmes](assets/qualite-themes.png)
+
+Chaque thème est noté sur deux axes : sa **cohérence** — accepte-t-il d'autres articles du même cluster — et sa **distinction** — rejette-t-il ceux des autres. Un fourre-tout se reconnaît à une cohérence haute avec une distinction basse.
+
+![Divergence lexicale](assets/divergence-lexicale.png)
+
+Les mots qui rendent une famille de médias reconnaissable face à toutes les autres, mesurés par divergence de Kullback-Leibler : une vue contrastive, qui oppose les groupes au lieu d'en faire la moyenne.
+
+![Procédés de persuasion](assets/procedes-persuasion.png)
+
+Les procédés rhétoriques relevés fragment par fragment sur la télévision et YouTube, en taux de segments concernés — les thèmes disent de quoi on parle, ceci dit comment le texte cherche à convaincre.
+
+![Couverture du corpus](assets/couverture-corpus.png)
+
+Un panneau en bas de page récapitule ce qui est suivi, source par source, avec les émissions de télévision regroupées par chaîne et leur part d'audience nationale.
 
 ---
 
@@ -32,7 +52,9 @@ Les vidéos et émissions sont découpées en segments d'environ 2 000 signes, h
 
 ## Installation
 
-Python 3.11+, [uv](https://docs.astral.sh/uv/), `ffmpeg` dans le `PATH` pour la transcription, et environ 5 Go d'espace disque. Un GPU NVIDIA accélère nettement la transcription sans être requis.
+Python 3.11+, [uv](https://docs.astral.sh/uv/), `ffmpeg` dans le `PATH` pour la transcription, et environ 10 Go d'espace disque.
+
+`uv sync` installe une version CUDA de PyTorch depuis l'index officiel PyTorch, déclaré dans `pyproject.toml` — comptez ~2,5 Go de téléchargement. C'est ce qui met la transcription Whisper et le calcul des embeddings sur le GPU : sur une RTX 2060, l'embedding du corpus passe de 33 à 2,5 minutes. Sans carte NVIDIA, tout fonctionne quand même, en basculant sur le processeur.
 
 ```bash
 git clone <url-du-repo>
@@ -62,6 +84,10 @@ uv run python update.py                    # collecte puis analyses
 uv run python update.py --skip-analyses    # collecte seule
 uv run streamlit run dashboard/app.py      # tableau de bord
 ```
+
+Deux analyses payantes restent hors routine, à lancer quand on en a besoin :
+`--with-validation` évalue la qualité des thèmes, `--with-techniques` relève les
+procédés rhétoriques sur la télévision et YouTube.
 
 La première collecte prend une vingtaine de minutes.
 
@@ -109,7 +135,7 @@ Les sources vidéo demandent en plus un `program_pattern`, expression régulièr
 ```
 config/sources.yaml   les sources et leurs étiquettes éditoriales
 src/                  collecte, un module par technique
-scripts/analysis/     sentiment, thèmes, auteurs
+scripts/analysis/     sentiment, thèmes, divergence lexicale, procédés rhétoriques
 scripts/maintenance/  diagnostics, à lancer à la main
 dashboard/app.py      le tableau de bord
 update.py             enchaîne collecte et analyses

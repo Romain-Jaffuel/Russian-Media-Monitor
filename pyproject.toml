@@ -16,13 +16,28 @@ description = "Veille automatisee des medias russophones : scraping RSS/HTML, an
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # --- Coeur ---
+    # NOYAU : uniquement ce dont le TABLEAU DE BORD a besoin.
+    #
+    # Tout le reste -- collecte, transcription, analyses -- vit dans l'extra
+    # « collecte » ci-dessous. La raison est un hebergeur : Streamlit Cloud
+    # installe depuis uv.lock, et il tentait donc de tirer torch CUDA, Whisper
+    # et Playwright pour afficher des graphiques, avant d'echouer faute de roue
+    # CUDA pour sa plateforme. Les extras, eux, ne sont jamais installes sans
+    # etre demandes.
+    #
+    # EN LOCAL, il faut donc :  uv sync --extra collecte
     "streamlit>=1.40",
     "duckdb>=1.1",
     "pandas>=2.2",
     "numpy>=2.0",
     "plotly>=5.24",
-    # --- Collecte / scraping ---
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+collecte = [
+    # --- Collecte ---
     "httpx>=0.27",
     "requests>=2.32",
     "feedparser>=6.0.11",
@@ -31,43 +46,21 @@ dependencies = [
     "trafilatura>=1.12",
     "brotli>=1.1.0",
     "langdetect>=1.0.9",
-    "pyyaml>=6.0",
-    # Sources video : listing des chaines + URL des pistes de sous-titres.
-    # A garder a jour -- YouTube casse regulierement les extracteurs, et
-    # yt-dlp corrige en quelques jours ; une version figee finit par ne plus
-    # rien renvoyer.
     "yt-dlp>=2025.1.15",
-    # --- Transcription des emissions de television (src/rutube_scrape.py) ---
-    # RuTube n'expose aucun sous-titre : la transcription se fait en local.
+    "playwright>=1.40",
+    "pip-system-certs>=5.3",
+    # --- Transcription des emissions ---
     "faster-whisper>=1.2",
-    # Bibliotheques CUDA runtime, indispensables a l'inference GPU de
-    # ctranslate2 : sans elles le modele se charge mais l'inference echoue sur
-    # « cublas64_12.dll is not found ». Declarees ici pour qu'un `uv sync` ne
-    # les retire pas. Inutiles sans carte NVIDIA (le module bascule alors sur
-    # CPU tout seul), mais inoffensives.
     "nvidia-cublas-cu12>=12.9",
     "nvidia-cudnn-cu12>=9.0",
-    # --- Analyses (Mistral) ---
+    # --- Analyses ---
     "mistralai>=1.2",
-    # --- Topic modeling (analyze_topics.py) ---
     "scikit-learn>=1.5",
     "bertopic>=0.16",
     "sentence-transformers>=3.0",
-    "pymorphy3>=1.2",        # lemmatisation russe (mots-cles de theme)
+    "pymorphy3>=1.2",
     "pymorphy3-dicts-ru>=2.4",
-    "nltk>=3.9",             # liste de stopwords russes (nltk.corpus.stopwords)
-    # --- Configuration .env (si chargement automatique active) ---
-    "python-dotenv>=1.0",
-    "pip-system-certs>=5.3",
-    # Navigateur sans interface : indispensable a src/vk_scrape.py (l'API VK
-    # exige un compte) et a src/hls_scrape.py (interception du flux des
-    # chaines de television). Il etait installe a la main et absent d'ici, si
-    # bien qu'un `uv sync` le retirait et cassait ces deux collecteurs sans
-    # message d'erreur avant la collecte suivante.
-    "playwright>=1.40",
-    # Declare explicitement pour pouvoir imposer la variante CUDA ci-dessous.
-    # Sans cette ligne, torch arrivait en dependance transitive de
-    # sentence-transformers et la resolution choisissait la roue CPU.
+    "nltk>=3.9",
     "torch>=2.6",
 ]
 
@@ -89,6 +82,9 @@ url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [tool.uv.sources]
+# Windows seulement : c'est la machine de collecte. Ailleurs -- un
+# hebergeur, une machine sans carte -- torch vient de PyPI en version
+# processeur, et de toute facon il n'est installe qu'avec l'extra.
 torch = [
-    { index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+    { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
 ]

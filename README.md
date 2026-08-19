@@ -52,9 +52,13 @@ Python 3.11+, [uv](https://docs.astral.sh/uv/), `ffmpeg` dans le `PATH` pour la 
 
 ```bash
 git clone <url-du-repo>
-cd Russia-Monitor
-uv sync
+cd Russian-Media-Monitor
+uv sync --extra collecte
 ```
+
+**`--extra collecte` n'est pas optionnel en local.** Les dépendances sont scindées en deux : un noyau léger, qui suffit au tableau de bord, et l'extra `collecte` qui contient torch, Whisper, BERTopic et Playwright. Ce découpage existe pour l'hébergement — Streamlit Cloud installe depuis `uv.lock` et tentait de tirer torch CUDA, sans roue pour sa plateforme.
+
+Conséquence à connaître : **un `uv sync` ou `uv run` sans `--extra collecte` désinstalle la chaîne de collecte**. Le tableau de bord continue de fonctionner, mais plus la collecte ni les analyses. Pour rétablir : `uv sync --extra collecte`.
 
 Préfixez ensuite vos commandes par `uv run`, ou activez le venv (`source .venv/Scripts/activate` sous Git Bash, `.venv/bin/activate` sous Linux/macOS).
 
@@ -74,7 +78,7 @@ Vérification : `uv run python -c "from src.llm_mistral import get_client; get_c
 ## Utilisation
 
 ```bash
-uv run python update.py                    # collecte puis analyses
+uv run --extra collecte python update.py    # collecte puis analyses
 uv run streamlit run dashboard/app.py      # tableau de bord
 ```
 

@@ -1,18 +1,34 @@
-# Theme epingle. Les couleurs des graphiques Plotly sont codees en dur en
-# sombre dans dashboard/app.py (style()) : sans ce fichier, un poste dont le
-# navigateur est en clair afficherait des rectangles sombres sur fond blanc.
-# Epingler le theme garantit que l'app rend partout comme elle est concue.
+# Theme de l'application. Tout ce qui est exprimable ici l'est ici plutot que
+# dans une balise <style> injectee : Streamlit applique ces valeurs a ses
+# propres composants, alors que du CSS vise leurs classes internes et casse a
+# la premiere montee de version.
+#
+# Le theme est aussi epingle en sombre a dessein : les couleurs des graphiques
+# Plotly sont fixees en dur dans style(), un poste en clair afficherait des
+# rectangles sombres sur fond blanc.
 [theme]
 base = "dark"
-primaryColor = "#00C2A8"          # accent d'interface (teal). Volontairement
-                                  # hors des palettes de donnees : le bleu et
-                                  # le rouge portent deja un sens (pro / anti),
-                                  # les reutiliser pour le chrome brouillerait
-                                  # la lecture des graphiques.
+
+# Accent d'interface. Volontairement hors des palettes de donnees : le bleu et
+# le rouge portent deja un sens (aligne / independant), les reutiliser pour le
+# chrome brouillerait la lecture des graphiques.
+primaryColor = "#00C2A8"
+linkColor = "#00C2A8"
+
 backgroundColor = "#0E1117"
 secondaryBackgroundColor = "#161A23"
 textColor = "#E6E8EB"
-font = "sans serif"
+borderColor = "#252B38"
+
+baseRadius = "0.6rem"
+showWidgetBorder = true
+showSidebarBorder = true
+
+# h1 sert au titre de l'application, h3 aux titres de section (33 usages) ; h2
+# n'apparait qu'une fois. Les tailles par defaut (2.75 / 2.25 / 1.75rem) sont
+# calibrees pour une page de texte, pas pour un tableau de bord dense.
+headingFontSizes = ["1.6rem", "1.3rem", "1.1rem", "1rem", "0.95rem", "0.9rem"]
+headingFontWeights = [700, 600, 600, 600, 600, 600]
 
 [server]
 headless = true

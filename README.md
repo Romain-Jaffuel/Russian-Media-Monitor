@@ -4,7 +4,7 @@ Veille des médias russophones sur la Russie. L'outil collecte chaque jour la pr
 
 ![Vue d'ensemble du tableau de bord](assets/vue-ensemble.png)
 
-Neuf onglets : volumes et couverture, signaux de rupture narrative, thèmes, sentiment géopolitique, cadrage lexical, alignement éditorial des sources, auteurs, diagnostic de collecte, et un rappel du paysage médiatique russe.
+Onze onglets, groupés en quatre familles séparées dans la barre : la vue d'ensemble ; les analyses de contenu (signaux de rupture narrative, thèmes, sentiment géopolitique, cadrage lexical) ; qui parle (alignement éditorial des sources, auteurs) ; et de quoi lire le reste (diagnostic de collecte, couverture du corpus, paysage médiatique russe, références).
 
 ![Carte d'influence](assets/carte-influence.png)
 
@@ -12,19 +12,15 @@ La carte d'influence situe seize acteurs géopolitiques : taille selon le nombre
 
 ![Répartition des thèmes](assets/themes.png)
 
-Les thèmes sont fait par clustering (TF-IDF puis DBSCAN) à partir des contenus ; chaque barre se décompose par nature de contenu, et une pondération permet de corriger la composition du corpus.
-
-![Divergence lexicale](assets/divergence-lexicale.png)
-
-Les mots qui rendent une famille de médias reconnaissable face à toutes les autres, mesurés par divergence de Kullback-Leibler.
+Les thèmes sortent d'un clustering des contenus, support par support, sur une fenêtre de 24 h ; chaque barre se décompose par nature de contenu.
 
 ![Procédés de persuasion](assets/procedes-persuasion.png)
 
 Les procédés rhétoriques relevés fragment par fragment sur la télévision et YouTube en pourcentage. Les procédés sont choisis sur la base des travaux de Giovanni [Da San Martino](https://scholar.google.com/citations?user=URABLy0AAAAJ&hl=en)
 
-![Couverture du corpus](assets/couverture-corpus.png)
+![Répartition du corpus par alignement](assets/alignement-corpus.png)
 
-Un panneau en bas de page récapitule ce qui est suivi, source par source, avec les émissions de télévision regroupées par chaîne et leur part d'audience nationale.
+La composition du corpus par famille éditoriale, et le volume de chaque source : c'est ce déséquilibre que les schémas de pondération servent à corriger.
 
 ---
 
@@ -180,6 +176,18 @@ requirements.txt      dépendances du dashboard hébergé, pas du projet local
 **`uv sync` échoue sur `invalid peer certificate`** — `uv sync --system-certs`.
 
 **`Failure while replaying WAL file`** — [bug DuckDB sous Windows](https://github.com/duckdb/duckdb/issues/19712). Déplacez `data/russia.duckdb.wal` et rouvrez.
+
+---
+
+## Origine et licence
+
+Ce dépôt reprend l'ossature initiale du pipeline de **[Gabon Monitor](https://github.com/Flor5378/Gabon-Monitor)**, de [Florian Grolleau](https://flor5378.github.io/) (cellule influence, détachement interarmées au Gabon) : collecte RSS, stockage DuckDB, tableau de bord Streamlit.
+
+Tout le reste a été développé ici : les sept techniques de collecte, la transcription des émissions de télévision, la pondération du corpus, et les analyses issues de la littérature de recherche — divergence lexicale, validation des thèmes, procédés rhétoriques.
+
+Les travaux dont l'outil s'inspire sont crédités avec leurs liens dans l'onglet **Références** du tableau de bord.
+
+Code sous **licence MIT** — voir [LICENSE](LICENSE).
 
 ---
 

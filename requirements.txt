@@ -1,0 +1,17 @@
+# Dependances du TABLEAU DE BORD HEBERGE uniquement.
+#
+# En local, c'est pyproject.toml et uv qui font foi : ce fichier n'y sert a
+# rien. Il existe parce qu'un hebergeur comme Streamlit Community Cloud
+# installe depuis requirements.txt, et qu'il ne doit surtout pas tirer la
+# chaine de collecte -- torch CUDA, faster-whisper, BERTopic et Playwright
+# pesent ensemble plus de 7 Go pour afficher des graphiques qui n'en ont aucun
+# besoin.
+#
+# Le dashboard lit l'instantane publie (data/snapshot.duckdb.gz), produit en
+# local par scripts/maintenance/export_snapshot.py.
+streamlit>=1.40
+duckdb>=1.1
+pandas>=2.2
+numpy>=2.0
+plotly>=5.24
+pyyaml>=6.0

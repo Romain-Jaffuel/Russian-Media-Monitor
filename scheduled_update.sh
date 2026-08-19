@@ -57,6 +57,14 @@ EXIT_CODE=${PIPESTATUS[0]}
     echo "==== Fin : $(date '+%Y-%m-%d %H:%M:%S') ===="
 } >> "$LOG_FILE"
 
+# Instantane publiable, uniquement si la passe s'est bien terminee : publier
+# une base a moitie remplie serait pire que publier celle de la veille.
+# Il n'est PAS pousse automatiquement -- le depot se fait a la main, quand on
+# a regarde le resultat.
+if [ "$EXIT_CODE" -eq 0 ]; then
+    "$PYTHON_EXE" scripts/maintenance/export_snapshot.py >> "$LOG_FILE" 2>&1         && echo "Instantane : data/snapshot.duckdb.gz"         || echo "Instantane : ECHEC (voir $LOG_FILE)"
+fi
+
 # Nettoyage des logs de plus de 30 jours
 find "$LOG_DIR" -name "update_*.log" -mtime +30 -delete 2>/dev/null
 

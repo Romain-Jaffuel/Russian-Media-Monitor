@@ -1,4 +1,4 @@
-# Russia Monitor
+# Russian Media Monitor
 
 Veille des médias russophones sur la Russie. L'outil collecte chaque jour la presse, les canaux Telegram, les émissions de télévision, les chaînes YouTube et les communautés VKontakte, les analyse avec un modèle de langage, et restitue le tout dans un tableau de bord.
 
@@ -104,6 +104,28 @@ Arguments : -lc "'/c/Users/<vous>/Classic/Russia-Monitor/scheduled_update.sh'"
 
 ---
 
+## Mettre le tableau de bord en ligne
+
+La collecte reste locale — elle a besoin d'une IP résidentielle, que YouTube et VK ne bloquent pas, et du GPU. Seul le tableau de bord est publié, et il lit une copie figée : il n'y a donc jamais deux processus sur la même base.
+
+```bash
+uv run python scripts/maintenance/export_snapshot.py
+```
+
+L'instantané retire `raw_html` et les tables inutilisées : **3,5 Go deviennent 59 Mo, puis 13 Mo compressés** — assez léger pour être versionné. `scheduled_update.sh` le produit automatiquement à la fin de chaque passe réussie ; le push, lui, reste manuel.
+
+```bash
+git add data/snapshot.duckdb.gz && git commit -m "instantane du jour" && git push
+```
+
+L'hébergeur installe depuis `requirements.txt`, qui ne contient que les six paquets du tableau de bord. Il ne faut surtout pas qu'il suive `pyproject.toml` : la chaîne de collecte pèse plus de 7 Go avec torch CUDA, Whisper et Playwright, dont l'affichage n'a aucun besoin.
+
+Le dashboard ouvre la base complète si elle est présente, l'instantané sinon — le même code tourne des deux côtés.
+
+**Streamlit Community Cloud** convient (gratuit, 1 Go de RAM, largement assez), à deux conditions : le dépôt doit être public, et l'application s'endort après 12 h sans visite. Pour du privé et sans veille, un VPS à 5–8 $/mois.
+
+---
+
 ## Ajouter une source
 
 Une entrée dans `config/sources.yaml`. Sans clé `type`, RSS est supposé.
@@ -139,6 +161,7 @@ scripts/analysis/     sentiment, thèmes, divergence lexicale, procédés rhéto
 scripts/maintenance/  diagnostics, à lancer à la main
 dashboard/app.py      le tableau de bord
 update.py             enchaîne collecte et analyses
+requirements.txt      dépendances du dashboard hébergé, pas du projet local
 ```
 
 `src/` est installé en editable par `uv sync` : `from src.db import ...` résout depuis n'importe où.

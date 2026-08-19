@@ -119,6 +119,12 @@ def run(n_topics=None, reset=False):
     conn = get_conn()
     ensure_schema(conn, reset=reset)
 
+    # Tirage des documents de controle rendu reproductible : sans graine, deux
+    # evaluations d'un meme clustering ne sont pas comparables, puisque les
+    # documents de controle changent. La variabilite du modele subsiste -- pour
+    # departager deux configurations proches, il faut plusieurs executions.
+    conn.execute("SELECT setseed(0.42)")
+
     themes = conn.execute("""
         SELECT t.topic_key, t.label, COUNT(*) AS n
         FROM article_topics at_ JOIN topics t ON t.topic_key = at_.topic_key

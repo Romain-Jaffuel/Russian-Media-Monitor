@@ -10,7 +10,7 @@ build-backend = "hatchling.build"
 packages = ["src"]
 
 [project]
-name = "russia-monitor"
+name = "russian-media-monitor"
 version = "0.1.0"
 description = "Veille automatisee des medias russophones : scraping RSS/HTML, analyse Mistral, DuckDB, dashboard Streamlit."
 readme = "README.md"

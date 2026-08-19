@@ -146,6 +146,11 @@ def build_keyword_filter(query, default_op="AND"):
 
 
 DB_PATH = Path("data/russia.duckdb")
+# Copie publiee : la seule chose dont dispose un hebergeur, la base
+# complete restant en local. A declarer ici, avant le premier usage --
+# le chemin local ne passe jamais par cette branche, donc l'erreur ne se
+# serait vue qu'une fois deploye.
+SNAPSHOT_GZ = Path("data/snapshot.duckdb.gz")
 SOURCES_PATH = Path("config/sources.yaml")
 
 
@@ -510,7 +515,7 @@ def style(fig, height=None):
 
 
 st.set_page_config(
-    page_title="Russia Monitor",
+    page_title="Russian Media Monitor",
     page_icon="◈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -605,15 +610,39 @@ st.markdown("""
 <div class="rm-head">
   <div class="rm-mark">◈</div>
   <div>
-    <p class="rm-title">Russia Monitor</p>
+    <p class="rm-title">Russian Media Monitor</p>
     <p class="rm-sub">Veille des medias russophones &mdash; presse, Telegram, YouTube, television, VK</p>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-if not DB_PATH.exists():
-    st.warning("Aucune base.")
+if not DB_PATH.exists() and not SNAPSHOT_GZ.exists():
+    st.warning(
+        "Aucune base. En local, lancez `python update.py` ; pour un "
+        "deploiement, publiez `data/snapshot.duckdb.gz` "
+        "(`python scripts/maintenance/export_snapshot.py`).")
     st.stop()
+
+@st.cache_resource(show_spinner="Decompression de l'instantane...")
+def _decompresser_snapshot():
+    """Prepare l'instantane publie pour la lecture, et renvoie son chemin.
+
+    En local la base complete est la et rien de tout ceci ne sert. Sur un
+    hebergeur, seul l'instantane compresse est versionne (13 Mo contre 3,5 Go) :
+    DuckDB ne sachant pas lire un .gz, on le detend une fois par session dans un
+    repertoire temporaire. `cache_resource` garantit que ca n'arrive qu'une fois
+    meme si plusieurs visiteurs arrivent en meme temps.
+    """
+    import gzip
+    import shutil
+    import tempfile
+
+    cible = Path(tempfile.gettempdir()) / "rmm-snapshot.duckdb"
+    if not cible.exists() or cible.stat().st_mtime < SNAPSHOT_GZ.stat().st_mtime:
+        with gzip.open(SNAPSHOT_GZ, "rb") as f, open(cible, "wb") as g:
+            shutil.copyfileobj(f, g)
+    return cible
+
 
 def ouvrir_base(essais=3, attente=1.5):
     """Connexion en lecture, avec quelques tentatives.
@@ -622,10 +651,13 @@ def ouvrir_base(essais=3, attente=1.5):
     ecrit, l'ouverture echoue. C'est normal, mais sans ce garde-fou Streamlit
     affichait une trace Python, ce qui ressemble a une base cassee.
     """
+    # Base complete si elle est la, instantane publie sinon.
+    chemin = DB_PATH if DB_PATH.exists() else (
+        _decompresser_snapshot() if SNAPSHOT_GZ.exists() else DB_PATH)
     derniere = None
     for reste in range(essais - 1, -1, -1):
         try:
-            return duckdb.connect(str(DB_PATH), read_only=True)
+            return duckdb.connect(str(chemin), read_only=True)
         except Exception as e:
             # On reessaie quelle que soit l'erreur : distinguer le verrou des
             # autres pannes supposerait de lire le texte du message, qui est
@@ -1345,12 +1377,24 @@ with tab_themes:
                 k3.metric("Themes fragiles", f"{faibles} / {len(df_q)}",
                           "coherence ou distinction < 0,5", delta_color="off")
 
+                # Les deux mesures sont discretes -- six documents de test et
+                # six de controle, donc des multiples de 1/6. Sans dispersion,
+                # 83 themes se superposaient sur une quinzaine de positions et
+                # le graphique montrait quinze points. Le decalage est calcule
+                # a partir de la cle du theme : il est donc stable d'un
+                # affichage a l'autre, contrairement a un tirage aleatoire.
+                _pas = 1 / 6 * 0.34
+                df_q["x_aff"] = df_q["coherence"] + (
+                    (df_q["topic_key"] * 7 % 11) / 10 - 0.5) * _pas
+                df_q["y_aff"] = df_q["distinction"] + (
+                    (df_q["topic_key"] * 13 % 11) / 10 - 0.5) * _pas
                 fig = px.scatter(
-                    df_q, x="coherence", y="distinction", size="n",
+                    df_q, x="x_aff", y="y_aff", size="n",
                     hover_name="label",
                     hover_data={"categorie": True, "n": True,
-                                "coherence": ":.2f", "distinction": ":.2f"},
-                    labels={"coherence": "Coherence", "distinction": "Distinction"})
+                                "coherence": ":.2f", "distinction": ":.2f",
+                                "x_aff": False, "y_aff": False},
+                    labels={"x_aff": "Coherence", "y_aff": "Distinction"})
                 fig.update_traces(marker=dict(color="#4C9AFF", opacity=0.75,
                                               line=dict(width=1, color="#161A23")))
                 # Les quadrants donnent la lecture : en haut a droite les themes
@@ -1361,6 +1405,12 @@ with tab_themes:
                 fig.update_yaxes(range=[-0.05, 1.05])
                 style(fig, 430)
                 st.plotly_chart(fig, width="stretch", key=_next_chart_key())
+                st.caption(
+                    "Chaque bulle est un theme, sa taille son nombre de "
+                    "segments. Les points sont legerement disperses : les deux "
+                    "mesures ne prennent que six valeurs chacune, et sans cela "
+                    "les themes se superposeraient exactement. Les valeurs "
+                    "exactes restent au survol.")
 
                 with st.expander("Themes les plus fragiles"):
                     faible = df_q[(df_q["coherence"] < 0.5) |

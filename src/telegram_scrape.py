@@ -22,7 +22,7 @@ from src.collect import RawArticle, url_hash
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36 RussiaMonitor/0.1"
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36 RussianMediaMonitor/0.1"
 )
 MIN_POST_LEN = 50  # sous ce seuil : probablement un post juste-image/repost, sans valeur textuelle
 MAX_PAGES = 5       # ~20 messages/page ; suffisant pour un run incremental,

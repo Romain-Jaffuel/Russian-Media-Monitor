@@ -35,7 +35,7 @@ from src.youtube_scrape import MAX_TITLE_CHARS, _segment
 
 log = logging.getLogger("rutube")
 
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RussiaMonitor/0.1"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RussianMediaMonitor/0.1"
 API_SEARCH = "https://rutube.ru/api/search/video/"
 
 MAX_EPISODES = 2       # deux numeros par emission et par run : les talk-shows

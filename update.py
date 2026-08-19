@@ -1,4 +1,4 @@
-"""Routine complete russia-monitor : collecte + refetch + analyses + diagnostic.
+"""Routine complete russian-media-monitor : collecte + refetch + analyses + diagnostic.
 
 Une seule commande pour tout mettre a jour :
     python update.py
@@ -122,7 +122,7 @@ def main():
         steps += STEPS_TECHNIQUES
     steps += STEPS_DIAG
 
-    banner(f"ROUTINE RUSSIA-MONITOR ({len(steps)} etapes)")
+    banner(f"ROUTINE RUSSIAN MEDIA MONITOR ({len(steps)} etapes)")
     print(f"Demarre a {datetime.now().strftime('%H:%M:%S')}")
 
     t_start = time.time()

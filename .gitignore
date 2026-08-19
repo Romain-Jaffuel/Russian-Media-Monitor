@@ -36,6 +36,8 @@ data/view/
 # caches JSON se reconstruisent tout seuls.
 data/*.duckdb
 data/*.duckdb.wal
+# ... sauf l'instantane publie, seule copie dont dispose l'hebergeur.
+!data/snapshot.duckdb.gz
 data/*.duckdb.bak*
 data/*.json
 

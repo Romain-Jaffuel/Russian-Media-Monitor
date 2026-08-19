@@ -4,7 +4,7 @@ Veille des médias russophones sur la Russie. L'outil collecte chaque jour la pr
 
 ![Vue d'ensemble du tableau de bord](assets/vue-ensemble.png)
 
-Neuf onglets : volumes et couverture, signaux de rupture, thèmes, sentiment géopolitique, cadrage lexical, alignement éditorial des sources, auteurs, diagnostic de collecte, et un rappel du paysage médiatique russe.
+Neuf onglets : volumes et couverture, signaux de rupture narrative, thèmes, sentiment géopolitique, cadrage lexical, alignement éditorial des sources, auteurs, diagnostic de collecte, et un rappel du paysage médiatique russe.
 
 ![Carte d'influence](assets/carte-influence.png)
 
@@ -12,19 +12,15 @@ La carte d'influence situe seize acteurs géopolitiques : taille selon le nombre
 
 ![Répartition des thèmes](assets/themes.png)
 
-Les thèmes ne sont pas une liste écrite à la main mais des clusters détectés dans les articles ; chaque barre se décompose par nature de contenu, et une pondération permet de corriger la composition du corpus.
-
-![Qualité des thèmes](assets/qualite-themes.png)
-
-Chaque thème est noté sur deux axes : sa **cohérence** — accepte-t-il d'autres articles du même cluster — et sa **distinction** — rejette-t-il ceux des autres. Un fourre-tout se reconnaît à une cohérence haute avec une distinction basse.
+Les thèmes sont fait par clustering (TF-IDF puis DBSCAN) à partir des contenus ; chaque barre se décompose par nature de contenu, et une pondération permet de corriger la composition du corpus.
 
 ![Divergence lexicale](assets/divergence-lexicale.png)
 
-Les mots qui rendent une famille de médias reconnaissable face à toutes les autres, mesurés par divergence de Kullback-Leibler : une vue contrastive, qui oppose les groupes au lieu d'en faire la moyenne.
+Les mots qui rendent une famille de médias reconnaissable face à toutes les autres, mesurés par divergence de Kullback-Leibler.
 
 ![Procédés de persuasion](assets/procedes-persuasion.png)
 
-Les procédés rhétoriques relevés fragment par fragment sur la télévision et YouTube, en taux de segments concernés — les thèmes disent de quoi on parle, ceci dit comment le texte cherche à convaincre.
+Les procédés rhétoriques relevés fragment par fragment sur la télévision et YouTube en pourcentage. Les procédés sont choisis sur la base des travaux de Giovanni [Da San Martino](https://scholar.google.com/citations?user=URABLy0AAAAJ&hl=en)
 
 ![Couverture du corpus](assets/couverture-corpus.png)
 
@@ -54,8 +50,6 @@ Les vidéos et émissions sont découpées en segments d'environ 2 000 signes, h
 
 Python 3.11+, [uv](https://docs.astral.sh/uv/), `ffmpeg` dans le `PATH` pour la transcription, et environ 10 Go d'espace disque.
 
-`uv sync` installe une version CUDA de PyTorch depuis l'index officiel PyTorch, déclaré dans `pyproject.toml` — comptez ~2,5 Go de téléchargement. C'est ce qui met la transcription Whisper et le calcul des embeddings sur le GPU : sur une RTX 2060, l'embedding du corpus passe de 33 à 2,5 minutes. Sans carte NVIDIA, tout fonctionne quand même, en basculant sur le processeur.
-
 ```bash
 git clone <url-du-repo>
 cd Russia-Monitor
@@ -64,9 +58,9 @@ uv sync
 
 Préfixez ensuite vos commandes par `uv run`, ou activez le venv (`source .venv/Scripts/activate` sous Git Bash, `.venv/bin/activate` sous Linux/macOS).
 
-### Clé API Mistral
+### Clé API Mistral (gratuit)
 
-Sans clé, la collecte fonctionne mais aucune analyse n'est produite.
+Sans clé, la collecte fonctionne mais aucune analyse n'est produite. Mistral propose actuellement $10 offert par mois, ce qui permet de traiter ~20 000 équivalents articles.
 
 ```bash
 cp env.example .env
@@ -81,17 +75,12 @@ Vérification : `uv run python -c "from src.llm_mistral import get_client; get_c
 
 ```bash
 uv run python update.py                    # collecte puis analyses
-uv run python update.py --skip-analyses    # collecte seule
 uv run streamlit run dashboard/app.py      # tableau de bord
 ```
 
-Deux analyses payantes restent hors routine, à lancer quand on en a besoin :
-`--with-validation` évalue la qualité des thèmes, `--with-techniques` relève les
-procédés rhétoriques sur la télévision et YouTube.
+Flag : `--with-validation` évalue la qualité des thèmes
 
-La première collecte prend une vingtaine de minutes.
-
-Ne lancez pas `update.py` pendant qu'une page du tableau de bord charge : DuckDB n'admet qu'un écrivain à la fois. Un onglet ouvert mais inactif ne gêne pas.
+Ne lancez pas `update.py` pendant qu'une page du tableau de bord charge : DuckDB n'admet qu'une écriture à la fois. Un onglet ouvert mais inactif ne gêne pas.
 
 ### Collecte automatique
 
@@ -148,7 +137,7 @@ Une entrée dans `config/sources.yaml`. Sans clé `type`, RSS est supposé.
 | `hls` | émission de TV sans API | la page de l'émission |
 | `vk` | communauté VKontakte | `https://vk.com/<communaute>` |
 
-Les sources vidéo demandent en plus un `program_pattern`, expression régulière filtrant les titres d'épisodes, et acceptent `search_query` et `min_duration`. Écrivez ces motifs entre **guillemets simples** : les guillemets doubles du YAML interprètent les échappements.
+Les sources vidéo demandent en plus un `program_pattern`, expression régulière filtrant les titres d'épisodes, et acceptent `search_query` et `min_duration`.
 
 ---
 

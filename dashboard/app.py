@@ -234,6 +234,12 @@ def fr_date(v, heure=False):
 # pas strftime -- c'est le composant JavaScript qui rend la cellule).
 FMT_DATE_TABLE = "DD/MM/YYYY HH:mm"
 
+# La collecte n'a atteint son regime qu'a cette date : avant, les sources
+# entraient une a une et les journees sont quasi vides. Les garder ecrasait la
+# courbe de volume contre l'axe. Le filtre ne s'applique qu'a ce graphique --
+# les compteurs et les analyses portent bien sur toute la periode choisie.
+DEBUT_SERIE = date(2026, 8, 11)
+
 # Libelle court d'une nature de contenu (colonne source_kind).
 UNITE_NATURE = {"press": "Presse", "tv": "Télévision", "youtube": "YouTube",
                 "telegram": "Telegram", "vk": "VK"}
@@ -1025,6 +1031,7 @@ with tab_vue:
         f"SELECT DATE_TRUNC('{GRAIN}', published_at) AS jour, source_name, COUNT(*) AS n "
         f"FROM articles WHERE {WHERE} AND published_at IS NOT NULL "
         f"GROUP BY 1, 2 ORDER BY 1", params).df()
+    df_vol = df_vol[pd.to_datetime(df_vol["jour"]).dt.date >= DEBUT_SERIE]
     if not df_vol.empty:
         st.subheader(f"Volume par {GRAIN_LABEL.lower()}")
         df_d, cmap, order = top5_plus_autres(df_vol, "source_name", "n")
@@ -1039,7 +1046,9 @@ with tab_vue:
             "En segments, l'unité réellement stockée et analysée : une "
             "émission de télévision de 2 h en produit une soixantaine, un "
             "article un seul. Une journée où la télévision pèse lourd n'est "
-            "donc pas une journée où elle a plus parlé que la presse.")
+            "donc pas une journée où elle a plus parlé que la presse. "
+            f"La courbe démarre au {DEBUT_SERIE:%d/%m/%Y}, date à laquelle la "
+            "collecte a atteint son régime.")
 
 
 # ===== Tab Thèmes ==============================================

@@ -27,7 +27,12 @@ from src.logging_setup import setup_logging
 
 log = setup_logging("snapshot")
 
-SORTIE = Path(f"data/snapshot_{date.today():%d/%m/%Y}.duckdb")
+# Nom FIXE, jamais date : le tableau de bord lit "data/snapshot.duckdb.gz",
+# .gitignore n'autorise que ce chemin, et un nom date accumulerait un
+# instantane par jour dans le depot. La date figure dans le message de
+# commit, pas dans le chemin -- ou son format francais glissait des « / »
+# pris pour des separateurs de repertoire.
+SORTIE = Path("data/snapshot.duckdb")
 
 # Colonnes conservees : tout sauf raw_html. Enumerees plutot que « SELECT * EXCEPT »
 # pour que l'ajout d'une colonne lourde en base ne se glisse pas dans

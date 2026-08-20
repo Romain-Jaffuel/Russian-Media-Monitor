@@ -1325,8 +1325,14 @@ with tab_themes:
                     "cohérence haute avec une distinction basse : sa définition "
                     "est si large qu'elle prend tout."
                 )
+                # Jointure interne, pas externe : topic_quality garde les
+                # resultats de clusterings precedents, dont les cles n'existent
+                # plus apres un --reset. En externe, leur volume ressortait a
+                # NaN et Plotly refusait la taille des bulles.
+                _q_avant = len(df_q)
                 df_q = df_q.merge(
-                    df_t[["topic_key", "label", "n"]], on="topic_key", how="left")
+                    df_t[["topic_key", "label", "n"]], on="topic_key", how="inner")
+                _q_perdus = _q_avant - len(df_q)
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Cohérence moyenne", f"{df_q['coherence'].mean():.2f}")
                 k2.metric("Distinction moyenne", f"{df_q['distinction'].mean():.2f}")
@@ -1363,6 +1369,12 @@ with tab_themes:
                 fig.update_yaxes(range=[-0.05, 1.05])
                 style(fig, 430)
                 st.plotly_chart(fig, width="stretch", key=_next_chart_key())
+                if _q_perdus:
+                    st.caption(
+                        f"{_q_perdus} évaluations portent sur des thèmes qui "
+                        "n'existent plus (clustering refait depuis) et ne sont "
+                        "pas affichées. Relancez `validate_topics.py` pour "
+                        "évaluer les thèmes actuels.")
                 st.caption(
                     "Chaque bulle est un thème, sa taille son nombre de "
                     "segments. Les points sont legerement disperses : les deux "

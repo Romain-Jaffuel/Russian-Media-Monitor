@@ -2,9 +2,11 @@
 
 Veille des médias russophones sur la Russie. L'outil collecte chaque jour la presse, les canaux Telegram, les émissions de télévision, les chaînes YouTube et les communautés VKontakte, les analyse avec un modèle de langage, et restitue le tout dans un tableau de bord.
 
+Pour utiliser l'outil : https://russian-media-monitor.streamlit.app/
+
 ![Vue d'ensemble du tableau de bord](assets/vue-ensemble.png)
 
-Onze onglets, groupés en quatre familles séparées dans la barre : la vue d'ensemble ; les analyses de contenu (signaux de rupture narrative, thèmes, sentiment géopolitique, cadrage lexical) ; qui parle (alignement éditorial des sources, auteurs) ; et de quoi lire le reste (diagnostic de collecte, couverture du corpus, paysage médiatique russe, références).
+Neuf onglets : volumes et couverture, signaux de rupture narrative, thèmes, sentiment géopolitique, cadrage lexical, alignement éditorial des sources, auteurs, diagnostic de collecte, et un rappel du paysage médiatique russe.
 
 ![Carte d'influence](assets/carte-influence.png)
 
@@ -20,7 +22,7 @@ Les procédés rhétoriques relevés fragment par fragment sur la télévision e
 
 ![Répartition du corpus par alignement](assets/alignement-corpus.png)
 
-La composition du corpus par famille éditoriale, et le volume de chaque source : c'est ce déséquilibre que les schémas de pondération servent à corriger.
+La composition du corpus par famille éditoriale, et le volume de chaque source.
 
 ---
 
@@ -181,9 +183,9 @@ requirements.txt      dépendances du dashboard hébergé, pas du projet local
 
 ## Origine et licence
 
-Ce dépôt reprend l'ossature initiale du pipeline de **[Gabon Monitor](https://github.com/Flor5378/Gabon-Monitor)**, de [Florian Grolleau](https://flor5378.github.io/) (cellule influence, détachement interarmées au Gabon) : collecte RSS, stockage DuckDB, tableau de bord Streamlit.
+Ce dépôt reprend l'ossature initiale du pipeline de **[Gabon Monitor](https://github.com/Flor5378/Gabon-Monitor)**, de [Florian Grolleau](https://flor5378.github.io/) (cellule influence, détachement interarmées au Gabon).
 
-Tout le reste a été développé ici : les sept techniques de collecte, la transcription des émissions de télévision, la pondération du corpus, et les analyses issues de la littérature de recherche — divergence lexicale, validation des thèmes, procédés rhétoriques.
+Tout le reste a été développé ici : les sept techniques de collecte, la transcription des émissions de télévision, la pondération du corpus, et les analyses issues de la littérature de recherche.
 
 Les travaux dont l'outil s'inspire sont crédités avec leurs liens dans l'onglet **Références** du tableau de bord.
 

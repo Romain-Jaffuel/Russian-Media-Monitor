@@ -23,11 +23,12 @@ morceaux. En dessous de MIN_DOCS_SUPPORT un support n'est donc pas clusterisé
 proches, sinon laissés non classés.
 
 Usage :
-  python scripts/analysis/analyze_topics_daily.py                  # hier
+  python scripts/analysis/analyze_topics_daily.py                  # aujourd'hui
   python scripts/analysis/analyze_topics_daily.py --date 2026-08-18
   python scripts/analysis/analyze_topics_daily.py --backfill 10    # 10 jours
 """
 import argparse
+import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
@@ -416,12 +417,24 @@ def _assurer_ligne_non_classe(conn, jour):
 
 def run(jour=None, backfill=0, seuil_cross=CROSS_THRESHOLD,
         seuil_registre=REGISTRY_THRESHOLD, reset=False):
+    import duckdb
     from sentence_transformers import SentenceTransformer
 
-    conn = get_conn()
+    try:
+        conn = get_conn()
+    except duckdb.IOException:
+        # Cas NORMAL : le tableau de bord est ouvert, ou une autre analyse
+        # ecrit. DuckDB n'admet qu'un ecrivain -- le dire plutot que de
+        # deverser une trace, la seule chose a faire etant d'attendre.
+        log.error("La base est ouverte par un autre processus (tableau de bord "
+                  "ou autre analyse). DuckDB n'admet qu'un ecrivain a la fois : "
+                  "fermez-le et relancez.")
+        return 1
     _ensure_schema_jour(conn, reset=reset)
 
-    fin = jour or (date.today() - timedelta(days=1))
+    # La routine collecte puis analyse dans la meme passe : le jour a
+    # regrouper est celui qui vient d'etre collecte, pas la veille.
+    fin = jour or date.today()
     jours = [fin - timedelta(days=k) for k in range(backfill, -1, -1)]
 
     log.info("Chargement du modèle d'embedding (%s)...", EMBED_MODEL)
@@ -440,8 +453,24 @@ def run(jour=None, backfill=0, seuil_cross=CROSS_THRESHOLD,
         "UPDATE topics SET article_count = (SELECT COUNT(*) FROM article_topics "
         "WHERE article_topics.topic_key = topics.topic_key)")
 
+    # Les evaluations ProxAnn portent sur un clustering donne : celles dont le
+    # theme n'existe plus ne veulent plus rien dire, et laissees en place elles
+    # remontaient jusqu'au graphique de qualite avec un volume vide.
+    # La table n'existe que si validate_topics.py a deja tourne.
+    if conn.execute("SELECT 1 FROM duckdb_tables() WHERE table_name = "
+                    "'topic_quality'").fetchone():
+        n_orph = conn.execute(
+            "SELECT COUNT(*) FROM topic_quality WHERE topic_key NOT IN "
+            "(SELECT topic_key FROM topics)").fetchone()[0]
+        if n_orph:
+            conn.execute("DELETE FROM topic_quality WHERE topic_key NOT IN "
+                         "(SELECT topic_key FROM topics)")
+            log.info("%d évaluations de thèmes disparus supprimées de "
+                     "topic_quality.", n_orph)
+
     _resume(conn, jours)
     conn.close()
+    return 0
 
 
 def _resume(conn, jours):
@@ -471,7 +500,7 @@ def _resume(conn, jours):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--date", help="jour à traiter (AAAA-MM-JJ), défaut : hier")
+    p.add_argument("--date", help="jour à traiter (AAAA-MM-JJ), défaut : aujourd'hui")
     p.add_argument("--backfill", type=int, default=0,
                    help="traiter aussi les N jours précédents, du plus ancien "
                         "au plus récent")
@@ -482,6 +511,7 @@ if __name__ == "__main__":
     p.add_argument("--reset", action="store_true",
                    help="vide topics/article_topics/topic_supports")
     a = p.parse_args()
-    run(jour=datetime.strptime(a.date, "%Y-%m-%d").date() if a.date else None,
+    sys.exit(run(
+        jour=datetime.strptime(a.date, "%Y-%m-%d").date() if a.date else None,
         backfill=a.backfill, seuil_cross=a.cross, seuil_registre=a.threshold,
-        reset=a.reset)
+        reset=a.reset))

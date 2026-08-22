@@ -2,7 +2,7 @@
 zoomable), acteurs (position des journalistes vs une cible géopolitique).
 """
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import duckdb
@@ -243,6 +243,12 @@ DEBUT_SERIE = date(2026, 8, 11)
 # Libelle court d'une nature de contenu (colonne source_kind).
 UNITE_NATURE = {"press": "Presse", "tv": "Télévision", "youtube": "YouTube",
                 "telegram": "Telegram", "vk": "VK"}
+
+# Couleur par nature de contenu. Fixee ici plutot que laissee au cycle par
+# defaut de Plotly : la frise et les graphiques empiles doivent donner la meme
+# couleur au meme support d'un onglet a l'autre.
+NATURE_COLORS = {"press": "#4C9AFF", "tv": "#B57BFF", "telegram": "#4CC38A",
+                 "youtube": "#FF6B6B", "vk": "#FFA94D"}
 
 
 def cols_article(**extra):
@@ -1063,15 +1069,105 @@ with tab_themes:
             "thème sans article récent devient inactif sans perdre son "
             "historique, et peut redevenir actif si le sujet revient."
         )
+        # --- Frise des journées ---------------------------------------------
+        # Le clustering travaille journée par journée : pouvoir en isoler une
+        # rend deux journées comparables, ce que la période globale de la barre
+        # latérale ne permet pas. Un menu déroulant aurait suffi à filtrer,
+        # mais il ne dit rien du corpus -- la frise montre en plus le volume de
+        # chaque journée et sa composition par support, et se clique.
+        #
+        # Le filtre porte sur la date de publication et non sur
+        # article_topics.run_date : tout ce bloc partage la clause _aw, qui sert
+        # aussi aux dénominateurs des pourcentages et à la pondération. Ne
+        # filtrer que les thèmes aurait laissé les dénominateurs sur la période
+        # entière, et les parts n'auraient plus sommé à 100 %.
+        # DEBUT_SERIE, comme la courbe de volume : avant cette date la collecte
+        # montait en charge et les journees sont trop maigres pour que leur
+        # clustering veuille dire quelque chose.
+        df_frise = conn.execute(
+            """SELECT CAST(a.published_at AS DATE) AS jour,
+                      COALESCE(a.source_kind, 'press') AS support,
+                      COUNT(*) AS n
+               FROM article_topics at_
+               JOIN articles a ON a.id = at_.article_id
+               WHERE at_.topic_key <> -1 AND at_.run_date >= ?
+               GROUP BY 1, 2 ORDER BY 1""", [DEBUT_SERIE]).df()
+
+        _aw, _pa, _sel_j = aw, params, None
+        if not df_frise.empty:
+            _jours_f = sorted(df_frise["jour"].unique())
+            _par_jour = df_frise.groupby("jour")["n"].sum()
+
+            # Une cle versionnee plutot qu'une remise a zero de l'etat du
+            # widget : c'est le seul moyen fiable de vider la selection d'un
+            # graphique Plotly, dont l'evenement survit au rerun.
+            st.session_state.setdefault("frise_v", 0)
+            _c_titre, _c_reset = st.columns([4, 1])
+            _c_titre.markdown("**Journées regroupées**")
+            if _c_reset.button("Toute la période", width="stretch",
+                               key="frise_reset"):
+                st.session_state.frise_v += 1
+            _cle_frise = f"frise_jours_{st.session_state.frise_v}"
+
+            # Selection lue AVANT de dessiner : la barre retenue doit ressortir
+            # des le meme rendu, sinon il faut deux clics pour la voir.
+            _ev = st.session_state.get(_cle_frise) or {}
+            _pts = ((_ev.get("selection") or {}).get("points")) or []
+            _idx = _pts[0].get("point_index") if _pts else None
+            if _idx is not None and 0 <= _idx < len(_jours_f):
+                _sel_j = _jours_f[_idx]
+
+            fig_f = go.Figure()
+            for _sup, _lib in UNITE_NATURE.items():
+                _serie = (df_frise[df_frise["support"] == _sup]
+                          .set_index("jour")["n"].reindex(_jours_f, fill_value=0))
+                if _serie.sum() == 0:
+                    continue
+                fig_f.add_bar(
+                    x=[f"{j:%d/%m}" for j in _jours_f], y=_serie.values,
+                    name=_lib, marker_color=NATURE_COLORS.get(_sup, MUTED),
+                    marker_opacity=[1.0 if (_sel_j is None or j == _sel_j) else 0.22
+                                    for j in _jours_f],
+                    hovertemplate="%{x} &mdash; " + _lib +
+                                  " : %{y} documents<extra></extra>")
+            fig_f.update_layout(barmode="stack", showlegend=True,
+                                # Sans traceorder, la legende horizontale
+                                # sort a l'envers de l'empilement.
+                                legend=dict(orientation="h", y=1.25, x=0,
+                                            title_text="", traceorder="normal"),
+                                bargap=0.28)
+            fig_f.update_yaxes(visible=False)
+            # type="category" impose : sans lui Plotly lit « 14/08 » comme
+            # une date, espace les etiquettes selon la largeur et ajoute
+            # un 21/08 qui n'existe pas dans les donnees.
+            fig_f.update_xaxes(type="category", tickangle=0, showgrid=False)
+            style(fig_f, 190)
+            st.plotly_chart(fig_f, width="stretch", key=_cle_frise,
+                            on_select="rerun", selection_mode="points")
+
+            if _sel_j is None:
+                st.caption(
+                    f"{len(_jours_f)} journées, "
+                    f"{int(_par_jour.sum()):,}".replace(",", "\u202f")
+                    + " documents classés. Cliquez une barre pour n'afficher "
+                      "que cette journée.")
+            else:
+                _aw = f"{aw} AND CAST(a.published_at AS DATE) = ?"
+                _pa = list(params) + [_sel_j]
+                st.caption(
+                    f"Filtré sur le **{fr_date(_sel_j)}** "
+                    f"({int(_par_jour.get(_sel_j, 0))} documents classés). "
+                    "« Toute la période » pour revenir à l'ensemble.")
+
         df_t = conn.execute(
             f"""SELECT t.topic_key, t.label, t.top_words, t.active,
                        t.first_seen, t.last_seen, COUNT(at_.article_id) AS n
             FROM topics t LEFT JOIN article_topics at_ ON at_.topic_key = t.topic_key
             LEFT JOIN articles a ON a.id = at_.article_id
-            WHERE t.topic_key != -1 AND (at_.article_id IS NULL OR {aw})
+            WHERE t.topic_key != -1 AND (at_.article_id IS NULL OR {_aw})
             GROUP BY t.topic_key, t.label, t.top_words, t.active, t.first_seen, t.last_seen
             ORDER BY n DESC""",
-            params).df()
+            _pa).df()
         df_t["pct"] = (df_t["n"] / df_t["n"].sum() * 100).round(1) if df_t["n"].sum() else 0.0
         nz = df_t[(df_t["n"] > 0) & (df_t["active"])].copy()
         archived = df_t[(df_t["n"] > 0) & (~df_t["active"])].sort_values("last_seen", ascending=False)
@@ -1122,7 +1218,7 @@ with tab_themes:
                 # vraie part du corpus, pas une part entre thèmes seulement.
                 denom_n, denom_chars = conn.execute(
                     f"SELECT COUNT(*), COALESCE(SUM(LENGTH(a.content)), 0) "
-                    f"FROM articles a WHERE {aw}", params).fetchone()
+                    f"FROM articles a WHERE {_aw}", _pa).fetchone()
                 denom_n = float(denom_n or 1)
                 denom_chars = float(denom_chars or 1)
 
@@ -1134,7 +1230,7 @@ with tab_themes:
                     f"""WITH pesee AS (
                             SELECT a.id, {SPLIT_COL} AS decoupe,
                                    LENGTH(a.content) AS chars, {W} AS w
-                            FROM articles a WHERE {aw}
+                            FROM articles a WHERE {_aw}
                         )
                         SELECT t.topic_key, t.label, p.decoupe,
                                CAST(SUM(p.w) AS DOUBLE) AS n,
@@ -1144,19 +1240,19 @@ with tab_themes:
                         JOIN pesee p ON p.id = at_.article_id
                         WHERE t.active AND t.topic_key != -1
                         GROUP BY t.topic_key, t.label, p.decoupe""",
-                    params).df()
+                    _pa).df()
 
                 # Dénominateurs pondérés de la même façon, sinon les parts ne
                 # sommeraient plus à 100 %.
                 denom_n, denom_chars, n_eff = conn.execute(
                     f"""WITH pesee AS (
                             SELECT LENGTH(a.content) AS chars, {W} AS w
-                            FROM articles a WHERE {aw}
+                            FROM articles a WHERE {_aw}
                         )
                         SELECT CAST(SUM(w) AS DOUBLE),
                                CAST(COALESCE(SUM(w * chars), 0) AS DOUBLE),
                                CAST(POWER(SUM(w), 2) / NULLIF(SUM(w * w), 0) AS DOUBLE)
-                        FROM pesee""", params).fetchone()
+                        FROM pesee""", _pa).fetchone()
                 denom_n = float(denom_n or 1)
                 denom_chars = float(denom_chars or 1)
 
@@ -1173,8 +1269,8 @@ with tab_themes:
 
                 if PONDERATION != "Brut":
                     n_brut = conn.execute(
-                        f"SELECT COUNT(*) FROM articles a WHERE {aw}",
-                        params).fetchone()[0] or 1
+                        f"SELECT COUNT(*) FROM articles a WHERE {_aw}",
+                        _pa).fetchone()[0] or 1
                     perte = 100 * (1 - (n_eff or 0) / n_brut)
                     st.caption(
                         f"**Pondération « {PONDERATION} ».** "
@@ -1201,13 +1297,13 @@ with tab_themes:
                                             ELSE COALESCE(a.type_media, 'inconnu')
                                        END AS strate,
                                        a.source_name, {W} AS w
-                                FROM articles a WHERE {aw}
+                                FROM articles a WHERE {_aw}
                             )
                             SELECT strate, COUNT(*) AS docs,
                                    COUNT(DISTINCT source_name) AS sources,
                                    100 * SUM(w) / (SELECT SUM(w) FROM pesee) AS part
                             FROM pesee GROUP BY 1 ORDER BY part DESC""",
-                        params).df()
+                        _pa).df()
                     fragiles = df_strates[(df_strates["part"] >= 10) &
                                           ((df_strates["sources"] < 3) |
                                            (df_strates["docs"] < 200))]
@@ -1305,6 +1401,149 @@ with tab_themes:
                     column_config={
                         c: st.column_config.DateColumn(c, format="DD/MM/YYYY")
                         for c in ("Vu depuis", "Vu jusqu'a")})
+
+        # --- Thèmes jour par jour ------------------------------------------
+        # Le clustering tourne sur une fenêtre de 24 h : chaque journée est
+        # regroupée pour elle-même, donc deux journées sont comparables. Sans
+        # cette section, cette dimension n'apparaissait nulle part -- le reste
+        # de l'onglet agrège toute la période choisie en un seul classement.
+        _jours = [r[0] for r in conn.execute(
+            "SELECT DISTINCT run_date FROM article_topics "
+            "WHERE run_date >= ? ORDER BY 1", [DEBUT_SERIE]).fetchall()]
+        if _jours:
+            st.markdown("---")
+            st.subheader("Thèmes jour par jour")
+            st.caption(
+                "Chaque journée est regroupée séparément, sur ses seules 24 h. "
+                "Cette section lit les journées telles qu'elles ont été "
+                "regroupées : elle ne dépend ni de la pondération ni de la "
+                "période choisies à gauche."
+            )
+
+            # --- Carte de chaleur : ce qui monte et ce qui tombe -----------
+            df_hm = conn.execute("""
+                WITH j AS (
+                    SELECT run_date, topic_key, COUNT(*) AS n
+                    FROM article_topics WHERE topic_key <> -1 AND run_date >= ?
+                    GROUP BY 1, 2),
+                     tot AS (SELECT run_date, SUM(n) AS t FROM j GROUP BY 1)
+                SELECT j.run_date AS jour, t.label AS theme,
+                       100.0 * j.n / tot.t AS part, j.n AS n
+                FROM j
+                JOIN tot ON tot.run_date = j.run_date
+                JOIN topics t ON t.topic_key = j.topic_key
+            """, [DEBUT_SERIE]).df()
+
+            if not df_hm.empty:
+                _rang = (df_hm.groupby("theme")["n"].sum()
+                         .sort_values(ascending=False).head(15).index)
+                _piv = (df_hm[df_hm["theme"].isin(_rang)]
+                        .pivot_table(index="theme", columns="jour",
+                                     values="part", fill_value=0)
+                        .reindex(_rang))
+                # Date courte : douze dates completes se chevauchaient
+                # au-dessus des colonnes.
+                _piv.columns = [f"{c:%d/%m}" for c in _piv.columns]
+                fig = px.imshow(
+                    _piv, aspect="auto", origin="upper",
+                    color_continuous_scale=[[0.0, "#12161F"], [1.0, ACCENT]],
+                    labels={"x": "", "y": "", "color": "% du jour"})
+                fig.update_traces(
+                    hovertemplate="%{y}<br>%{x} : %{z:.1f} %% des documents "
+                                  "classés<extra></extra>")
+                fig.update_xaxes(side="top", tickangle=0)
+                style(fig, 34 * len(_piv) + 110)
+                st.plotly_chart(fig, width="stretch", key=_next_chart_key())
+                st.caption(
+                    "Les quinze thèmes les plus volumineux, en part des "
+                    "documents classés de chaque journée. Une case vide veut "
+                    "dire que le thème n'a pas été retrouvé ce jour-là."
+                )
+
+            # --- Détail d'une journée ou d'une semaine ---------------------
+            _c1, _c2 = st.columns([1, 2])
+            _grain = _c1.radio("Granularité", ["Jour", "Semaine"],
+                               horizontal=True, key="th_jour_grain")
+            if _grain == "Jour":
+                _choix = _c2.selectbox("Journée", list(reversed(_jours)),
+                                       format_func=fr_date, key="th_jour_sel")
+                _deb, _fin = _choix, _choix
+                _pas = timedelta(days=1)
+            else:
+                _lundis = sorted({j - timedelta(days=j.weekday()) for j in _jours},
+                                 reverse=True)
+                _choix = _c2.selectbox("Semaine du", _lundis, format_func=fr_date,
+                                       key="th_sem_sel")
+                _deb, _fin = _choix, _choix + timedelta(days=6)
+                _pas = timedelta(days=7)
+
+            def _themes_periode(debut, fin):
+                return conn.execute("""
+                    WITH n AS (
+                        SELECT topic_key, COUNT(*) AS n FROM article_topics
+                        WHERE run_date BETWEEN ? AND ? AND topic_key <> -1
+                        GROUP BY 1),
+                         s AS (
+                        SELECT topic_key, STRING_AGG(DISTINCT source_kind, ' + ') AS supports
+                        FROM topic_supports WHERE run_date BETWEEN ? AND ? GROUP BY 1)
+                    SELECT t.label AS theme, n.n AS n, s.supports AS supports
+                    FROM n JOIN topics t ON t.topic_key = n.topic_key
+                    LEFT JOIN s ON s.topic_key = n.topic_key
+                    ORDER BY n.n DESC
+                """, [debut, fin, debut, fin]).df()
+
+            df_p = _themes_periode(_deb, _fin)
+            df_prec = _themes_periode(_deb - _pas, _fin - _pas)
+
+            _n_cls, _n_tot = conn.execute(
+                "SELECT SUM(CASE WHEN topic_key <> -1 THEN 1 ELSE 0 END), COUNT(*) "
+                "FROM article_topics WHERE run_date BETWEEN ? AND ?",
+                [_deb, _fin]).fetchone()
+            _n_cls, _n_tot = int(_n_cls or 0), int(_n_tot or 0)
+
+            if df_p.empty:
+                st.caption("Aucun thème sur cette période.")
+            else:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Thèmes", f"{len(df_p)}")
+                m2.metric("Documents classés", f"{_n_cls:,}".replace(",", "\u202f"))
+                m3.metric("Non classés",
+                          f"{100 * (_n_tot - _n_cls) / max(_n_tot, 1):.0f} %",
+                          f"{_n_tot - _n_cls} documents", delta_color="off")
+
+                # Part du jour plutot que volume brut : deux journees n'ont pas
+                # le meme volume, comparer les effectifs induirait en erreur.
+                df_p["Part"] = 100 * df_p["n"] / max(_n_cls, 1)
+                _avant = df_prec.set_index("theme")["n"].to_dict()
+                _tot_av = max(sum(_avant.values()), 1)
+                df_p["Écart"] = [
+                    ("nouveau" if t not in _avant else
+                     f"{100 * r / max(_n_cls, 1) - 100 * _avant[t] / _tot_av:+.1f} pt")
+                    for t, r in zip(df_p["theme"], df_p["n"])]
+
+                st.dataframe(
+                    df_p.rename(columns={"theme": "Thème", "n": "Documents",
+                                         "supports": "Supports"})[
+                        ["Thème", "Documents", "Part", "Supports", "Écart"]],
+                    width="stretch", hide_index=True,
+                    column_config={
+                        "Part": st.column_config.NumberColumn(
+                            "Part", format="%.1f %%"),
+                        "Documents": st.column_config.NumberColumn(format="%d"),
+                    })
+                st.caption(
+                    "**Supports** : les natures de contenu où le thème a été "
+                    "trouvé. Plusieurs supports signifient que leurs clusters "
+                    "se sont révélés assez proches pour être recoupés. "
+                    "**Écart** : évolution de la part par rapport à la période "
+                    "précédente de même durée, en points de pourcentage."
+                )
+
+                _disparus = [t for t in _avant if t not in set(df_p["theme"])]
+                if _disparus:
+                    st.caption("**Plus vus sur cette période** : "
+                               + ", ".join(sorted(_disparus)[:12])
+                               + ("..." if len(_disparus) > 12 else ""))
 
         # --- Qualité des clusters (protocole ProxAnn) ---------------------
         if has_topic_quality:

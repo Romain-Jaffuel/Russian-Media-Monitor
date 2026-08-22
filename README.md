@@ -16,6 +16,10 @@ La carte d'influence situe seize acteurs géopolitiques : taille selon le nombre
 
 Les thèmes sortent d'un clustering des contenus, support par support, sur une fenêtre de 24 h ; chaque barre se décompose par nature de contenu.
 
+![Thèmes jour par jour](assets/themes-par-jour.png)
+
+Chaque journée est regroupée pour elle-même, sur ses seules 24 h : la carte donne la part de chaque thème jour après jour, et un clic sur la frise du dessus filtre tout l'onglet sur une journée.
+
 ![Procédés de persuasion](assets/procedes-persuasion.png)
 
 Les procédés rhétoriques relevés fragment par fragment sur la télévision et YouTube en pourcentage. Les procédés sont choisis sur la base des travaux de Giovanni [Da San Martino](https://scholar.google.com/citations?user=URABLy0AAAAJ&hl=en)

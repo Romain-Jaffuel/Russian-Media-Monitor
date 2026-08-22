@@ -656,6 +656,7 @@ has_topics = "topics" in tables and "article_topics" in tables
 has_divergence = "lexical_divergence" in tables
 has_techniques = "article_techniques" in tables
 has_topic_quality = "topic_quality" in tables
+has_topic_supports = "topic_supports" in tables
 has_geo = "entity_geo" in tables
 
 
@@ -1414,10 +1415,8 @@ with tab_themes:
             st.markdown("---")
             st.subheader("Thèmes jour par jour")
             st.caption(
-                "Chaque journée est regroupée séparément, sur ses seules 24 h. "
-                "Cette section lit les journées telles qu'elles ont été "
-                "regroupées : elle ne dépend ni de la pondération ni de la "
-                "période choisies à gauche."
+                "Chaque journée est regroupée séparément, sur ses seules "
+                "24 h. Les filtres de gauche ne s'appliquent pas ici."
             )
 
             # --- Carte de chaleur : ce qui monte et ce qui tombe -----------
@@ -1478,19 +1477,32 @@ with tab_themes:
                 _pas = timedelta(days=7)
 
             def _themes_periode(debut, fin):
+                # La ventilation par support vient d'une table ecrite par le
+                # clustering quotidien : une base plus ancienne ne l'a pas, et
+                # la requete doit alors se rabattre sur le seul decompte.
+                if has_topic_supports:
+                    return conn.execute("""
+                        WITH n AS (
+                            SELECT topic_key, COUNT(*) AS n FROM article_topics
+                            WHERE run_date BETWEEN ? AND ? AND topic_key <> -1
+                            GROUP BY 1),
+                             s AS (
+                            SELECT topic_key,
+                                   STRING_AGG(DISTINCT source_kind, ' + ') AS supports
+                            FROM topic_supports WHERE run_date BETWEEN ? AND ?
+                            GROUP BY 1)
+                        SELECT t.label AS theme, n.n AS n, s.supports AS supports
+                        FROM n JOIN topics t ON t.topic_key = n.topic_key
+                        LEFT JOIN s ON s.topic_key = n.topic_key
+                        ORDER BY n.n DESC
+                    """, [debut, fin, debut, fin]).df()
                 return conn.execute("""
-                    WITH n AS (
-                        SELECT topic_key, COUNT(*) AS n FROM article_topics
-                        WHERE run_date BETWEEN ? AND ? AND topic_key <> -1
-                        GROUP BY 1),
-                         s AS (
-                        SELECT topic_key, STRING_AGG(DISTINCT source_kind, ' + ') AS supports
-                        FROM topic_supports WHERE run_date BETWEEN ? AND ? GROUP BY 1)
-                    SELECT t.label AS theme, n.n AS n, s.supports AS supports
-                    FROM n JOIN topics t ON t.topic_key = n.topic_key
-                    LEFT JOIN s ON s.topic_key = n.topic_key
-                    ORDER BY n.n DESC
-                """, [debut, fin, debut, fin]).df()
+                    SELECT t.label AS theme, COUNT(*) AS n, NULL AS supports
+                    FROM article_topics at_
+                    JOIN topics t ON t.topic_key = at_.topic_key
+                    WHERE at_.run_date BETWEEN ? AND ? AND at_.topic_key <> -1
+                    GROUP BY 1 ORDER BY n DESC
+                """, [debut, fin]).df()
 
             df_p = _themes_periode(_deb, _fin)
             df_prec = _themes_periode(_deb - _pas, _fin - _pas)

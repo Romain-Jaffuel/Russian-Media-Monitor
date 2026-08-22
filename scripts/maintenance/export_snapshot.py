@@ -45,7 +45,8 @@ COLONNES = """id, source_name, feed_url, url, title, author, summary, content,
 # (entities, article_meta, article_events...) restent en local et ne sont pas
 # publiees.
 TABLES = ("article_target_sentiment", "article_topics", "topics",
-          "lexical_divergence", "topic_quality", "article_techniques")
+          "topic_supports", "lexical_divergence", "topic_quality",
+          "article_techniques")
 
 
 def run(compresser=True, publier=False):

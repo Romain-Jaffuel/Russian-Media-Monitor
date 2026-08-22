@@ -57,12 +57,23 @@ EXIT_CODE=${PIPESTATUS[0]}
     echo "==== Fin : $(date '+%Y-%m-%d %H:%M:%S') ===="
 } >> "$LOG_FILE"
 
-# Instantane publiable, uniquement si la passe s'est bien terminee : publier
-# une base a moitie remplie serait pire que publier celle de la veille.
-# Il n'est PAS pousse automatiquement -- le depot se fait a la main, quand on
-# a regarde le resultat.
+# Sous-produits d'une passe reussie. Chacun est optionnel : une capture ratee
+# ou un instantane manque ne doit pas faire echouer la collecte, qui elle a
+# abouti. D'ou le || echo plutot qu'un set -e.
+#
+# L'instantane n'est PAS pousse automatiquement -- le depot se fait a la main,
+# quand on a regarde le resultat.
 if [ "$EXIT_CODE" -eq 0 ]; then
-    "$PYTHON_EXE" scripts/maintenance/export_snapshot.py >> "$LOG_FILE" 2>&1         && echo "Instantane : data/snapshot.duckdb.gz"         || echo "Instantane : ECHEC (voir $LOG_FILE)"
+    "$PYTHON_EXE" scripts/maintenance/export_snapshot.py >> "$LOG_FILE" 2>&1 \
+        && echo "Instantane : data/snapshot.duckdb.gz" \
+        || echo "Instantane : ECHEC (voir $LOG_FILE)"
+
+    # Captures du README. Elles demandent Playwright (extra collecte) et
+    # ouvrent la base : a lancer APRES l'export, une fois update.py termine,
+    # sinon les deux se disputent le verrou DuckDB.
+    "$PYTHON_EXE" scripts/maintenance/capture_dashboard.py >> "$LOG_FILE" 2>&1 \
+        && echo "Captures  : assets/*.png" \
+        || echo "Captures  : ECHEC (voir $LOG_FILE)"
 fi
 
 # Nettoyage des logs de plus de 30 jours

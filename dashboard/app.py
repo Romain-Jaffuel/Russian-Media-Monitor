@@ -1104,7 +1104,9 @@ with tab_themes:
             # graphique Plotly, dont l'evenement survit au rerun.
             st.session_state.setdefault("frise_v", 0)
             _c_titre, _c_reset = st.columns([4, 1])
-            _c_titre.markdown("**Journées regroupées**")
+            _c_titre.markdown(
+                "**Journées regroupées** &nbsp;·&nbsp; "
+                ":primary-badge[Cliquez une barre pour isoler une journée]")
             if _c_reset.button("Toute la période", width="stretch",
                                key="frise_reset"):
                 st.session_state.frise_v += 1
@@ -1136,7 +1138,11 @@ with tab_themes:
                                 # sort a l'envers de l'empilement.
                                 legend=dict(orientation="h", y=1.25, x=0,
                                             title_text="", traceorder="normal"),
-                                bargap=0.28)
+                                bargap=0.28,
+                                # Sans ca, glisser trace un rectangle de
+                                # zoom au lieu de selectionner, et le clic
+                                # simple passe pour une fausse manoeuvre.
+                                dragmode=False)
             fig_f.update_yaxes(visible=False)
             # type="category" impose : sans lui Plotly lit « 14/08 » comme
             # une date, espace les etiquettes selon la largeur et ajoute
@@ -1149,9 +1155,8 @@ with tab_themes:
             if _sel_j is None:
                 st.caption(
                     f"{len(_jours_f)} journées, "
-                    f"{int(_par_jour.sum()):,}".replace(",", "\u202f")
-                    + " documents classés. Cliquez une barre pour n'afficher "
-                      "que cette journée.")
+                    + f"{int(_par_jour.sum()):,}".replace(",", " ")
+                    + " documents classés.")
             else:
                 _aw = f"{aw} AND CAST(a.published_at AS DATE) = ?"
                 _pa = list(params) + [_sel_j]

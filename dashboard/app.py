@@ -1117,6 +1117,36 @@ with tab_themes:
             "sans article récent devient inactif en gardant son historique, "
             "et redevient actif si le sujet revient."
         )
+        # --- Choix du clustering ---------------------------------------------
+        # Deux regroupements coexistent en base, produits par le meme run :
+        # un global tous supports meles, et un par type de media. Ils repondent
+        # a deux questions differentes et se comparent ; le selecteur dit lequel
+        # on regarde.
+        # Un support dont aucun document n'est classe n'a pas de clustering a
+        # montrer : VK, trop maigre meme sur une fenetre elargie, produit des
+        # lignes « non classe » et rien d'autre. La condition le retire d'elle-
+        # meme, et le ferait revenir le jour ou il aurait assez de volume.
+        _portees = [r[0] for r in conn.execute(
+            "SELECT DISTINCT portee FROM article_topics "
+            "WHERE portee IS NOT NULL AND topic_key <> -1 ORDER BY 1").fetchall()]
+        _po = "global"
+        if len(_portees) > 1:
+            _opts = ["global"] + [x for x in _portees if x != "global"]
+            _po = st.segmented_control(
+                "Clustering", _opts, default="global", selection_mode="single",
+                key="theme_portee",
+                format_func=lambda v: ("Tous types confondus" if v == "global"
+                                       else UNITE_NATURE.get(v, v)),
+                help="« Tous types confondus » regroupe presse, télévision et "
+                     "Telegram dans le même espace. Les autres montrent le "
+                     "regroupement propre à un support, calculé sans les "
+                     "autres.") or "global"
+            st.caption(
+                "Regroupement global, tous supports mêlés."
+                if _po == "global" else
+                f"Regroupement propre à {UNITE_NATURE.get(_po, _po)}, calculé "
+                "sur ses seuls documents.")
+
         # --- Choix de la période ---------------------------------------------
         # Le filtre porte sur la date de publication et non sur
         # article_topics.run_date : tout ce bloc partage la clause _aw, qui
@@ -1125,7 +1155,8 @@ with tab_themes:
         # période entière, et les parts ne sommeraient plus à 100 %.
         _jours_topics = [r[0] for r in conn.execute(
             "SELECT DISTINCT run_date FROM article_topics "
-            "WHERE run_date >= ? ORDER BY 1", [DEBUT_SERIE]).fetchall()]
+            "WHERE run_date >= ? AND portee = ? ORDER BY 1",
+            [DEBUT_SERIE, _po]).fetchall()]
 
         _aw, _pa = aw, params
         if _jours_topics:
@@ -1135,8 +1166,8 @@ with tab_themes:
                 _pa = list(params) + [_deb_j, _fin_j]
                 _n_j = conn.execute(
                     "SELECT COUNT(*) FROM article_topics "
-                    "WHERE run_date BETWEEN ? AND ? AND topic_key <> -1",
-                    [_deb_j, _fin_j]).fetchone()[0]
+                    "WHERE run_date BETWEEN ? AND ? AND topic_key <> -1 "
+                    "AND portee = ?", [_deb_j, _fin_j, _po]).fetchone()[0]
                 _quand = (f"Semaine du **{fr_date(_deb_j)}** au "
                           f"**{fr_date(_fin_j)}**" if _grain_j == "Semaine"
                           else f"Journée du **{fr_date(_deb_j)}**")
@@ -1154,7 +1185,8 @@ with tab_themes:
                        t.first_seen, t.last_seen, COUNT(at_.article_id) AS n
             FROM topics t LEFT JOIN article_topics at_ ON at_.topic_key = t.topic_key
             LEFT JOIN articles a ON a.id = at_.article_id
-            WHERE t.topic_key != -1 AND (at_.article_id IS NULL OR {_aw})
+            WHERE t.topic_key != -1 AND COALESCE(t.portee, 'global') = '{_po}'
+              AND (at_.article_id IS NULL OR {_aw})
             GROUP BY t.topic_key, t.label, t.top_words, t.active, t.first_seen, t.last_seen
             ORDER BY n DESC""",
             _pa).df()
@@ -1229,6 +1261,7 @@ with tab_themes:
                         JOIN article_topics at_ ON at_.topic_key = t.topic_key
                         JOIN pesee p ON p.id = at_.article_id
                         WHERE t.active AND t.topic_key != -1
+                          AND COALESCE(t.portee, 'global') = '{_po}'
                         GROUP BY t.topic_key, t.label, p.decoupe""",
                     _pa).df()
 
@@ -1400,7 +1433,8 @@ with tab_themes:
         # de l'onglet agrège toute la période choisie en un seul classement.
         _jours = [r[0] for r in conn.execute(
             "SELECT DISTINCT run_date FROM article_topics "
-            "WHERE run_date >= ? ORDER BY 1", [DEBUT_SERIE]).fetchall()]
+            "WHERE run_date >= ? AND portee = ? ORDER BY 1",
+            [DEBUT_SERIE, _po]).fetchall()]
         if _jours:
             st.markdown("---")
             st.subheader("Thèmes jour par jour")
@@ -1414,6 +1448,7 @@ with tab_themes:
                 WITH j AS (
                     SELECT run_date, topic_key, COUNT(*) AS n
                     FROM article_topics WHERE topic_key <> -1 AND run_date >= ?
+                      AND portee = ?
                     GROUP BY 1, 2),
                      tot AS (SELECT run_date, SUM(n) AS t FROM j GROUP BY 1)
                 SELECT j.run_date AS jour, t.label AS theme,
@@ -1421,7 +1456,7 @@ with tab_themes:
                 FROM j
                 JOIN tot ON tot.run_date = j.run_date
                 JOIN topics t ON t.topic_key = j.topic_key
-            """, [DEBUT_SERIE]).df()
+            """, [DEBUT_SERIE, _po]).df()
 
             if not df_hm.empty:
                 # Meme plafond que le selecteur : au-dela d'un mois les
@@ -1468,6 +1503,7 @@ with tab_themes:
                         WITH n AS (
                             SELECT topic_key, COUNT(*) AS n FROM article_topics
                             WHERE run_date BETWEEN ? AND ? AND topic_key <> -1
+                              AND portee = ?
                             GROUP BY 1),
                              s AS (
                             SELECT topic_key,
@@ -1478,22 +1514,23 @@ with tab_themes:
                         FROM n JOIN topics t ON t.topic_key = n.topic_key
                         LEFT JOIN s ON s.topic_key = n.topic_key
                         ORDER BY n.n DESC
-                    """, [debut, fin, debut, fin]).df()
+                    """, [debut, fin, _po, debut, fin]).df()
                 return conn.execute("""
                     SELECT t.label AS theme, COUNT(*) AS n, NULL AS supports
                     FROM article_topics at_
                     JOIN topics t ON t.topic_key = at_.topic_key
                     WHERE at_.run_date BETWEEN ? AND ? AND at_.topic_key <> -1
+                      AND at_.portee = ?
                     GROUP BY 1 ORDER BY n DESC
-                """, [debut, fin]).df()
+                """, [debut, fin, _po]).df()
 
             df_p = _themes_periode(_deb, _fin)
             df_prec = _themes_periode(_deb - _pas, _fin - _pas)
 
             _n_cls, _n_tot = conn.execute(
                 "SELECT SUM(CASE WHEN topic_key <> -1 THEN 1 ELSE 0 END), COUNT(*) "
-                "FROM article_topics WHERE run_date BETWEEN ? AND ?",
-                [_deb, _fin]).fetchone()
+                "FROM article_topics WHERE run_date BETWEEN ? AND ? AND portee = ?",
+                [_deb, _fin, _po]).fetchone()
             _n_cls, _n_tot = int(_n_cls or 0), int(_n_tot or 0)
 
             if df_p.empty:
@@ -1516,16 +1553,56 @@ with tab_themes:
                      f"{100 * r / max(_n_cls, 1) - 100 * _avant[t] / _tot_av:+.1f} pt")
                     for t, r in zip(df_p["theme"], df_p["n"])]
 
-                st.dataframe(
-                    df_p.rename(columns={"theme": "Thème", "n": "Documents",
-                                         "supports": "Supports"})[
-                        ["Thème", "Documents", "Part", "Supports", "Écart"]],
-                    width="stretch", hide_index=True,
-                    column_config={
-                        "Part": st.column_config.NumberColumn(
-                            "Part", format="%.1f %%"),
-                        "Documents": st.column_config.NumberColumn(format="%d"),
-                    })
+                # Le clustering regroupe chaque support chez lui avant de
+                # recouper les clusters proches ; chacun garde donc son propre
+                # vocabulaire pour un même sujet. La vue éclatée le montre :
+                # c'est là qu'on voit la presse et la télévision nommer
+                # différemment la même chose.
+                _vue = st.segmented_control(
+                    "Vue", ["Thèmes recoupés", "Éclatés par support"],
+                    default="Thèmes recoupés", selection_mode="single",
+                    key="th_vue_support") or "Thèmes recoupés"
+
+                if _vue == "Éclatés par support" and has_topic_supports:
+                    df_e = conn.execute("""
+                        SELECT t.label AS "Thème",
+                               ts.source_kind AS "Support",
+                               SUM(ts.n_docs) AS "Documents",
+                               ANY_VALUE(ts.top_words) AS "Mots-clés du support"
+                        FROM topic_supports ts
+                        JOIN topics t ON t.topic_key = ts.topic_key
+                        WHERE ts.run_date BETWEEN ? AND ?
+                        GROUP BY 1, 2 ORDER BY 3 DESC
+                    """, [_deb, _fin]).df()
+                    if df_e.empty:
+                        st.caption("Aucun cluster par support sur cette période.")
+                    else:
+                        df_e["Support"] = df_e["Support"].map(
+                            lambda k: UNITE_NATURE.get(k, k))
+                        st.dataframe(
+                            df_e, width="stretch", hide_index=True,
+                            column_config={
+                                "Documents": st.column_config.NumberColumn(
+                                    format="%d"),
+                                "Mots-clés du support":
+                                    st.column_config.TextColumn(width="large"),
+                            })
+                        _multi = (df_e.groupby("Thème")["Support"].nunique() > 1).sum()
+                        st.caption(
+                            f"Une ligne par support et par thème. {_multi} thèmes "
+                            "apparaissent sur plusieurs supports : comparer leurs "
+                            "mots-clés montre comment chacun formule le sujet.")
+                else:
+                    st.dataframe(
+                        df_p.rename(columns={"theme": "Thème", "n": "Documents",
+                                             "supports": "Supports"})[
+                            ["Thème", "Documents", "Part", "Supports", "Écart"]],
+                        width="stretch", hide_index=True,
+                        column_config={
+                            "Part": st.column_config.NumberColumn(
+                                "Part", format="%.1f %%"),
+                            "Documents": st.column_config.NumberColumn(format="%d"),
+                        })
                 st.caption(
                     "**Supports** : les natures de contenu où le thème a été "
                     "trouvé. Plusieurs supports signifient que leurs clusters "
@@ -2500,7 +2577,10 @@ with tab_diagnostic:
         WITH weeks AS (
             SELECT DATE_TRUNC('{GRAIN}', a.published_at) AS week,
                    COUNT(*) AS total,
-                   SUM(CASE WHEN a.content IS NOT NULL AND LENGTH(a.content) >= 300
+                   -- Meme seuil que les analyses, sinon le taux depasse
+                   -- 100 % : Telegram est analyse des 50 signes.
+                   SUM(CASE WHEN a.content IS NOT NULL AND LENGTH(a.content) >=
+                            (CASE WHEN a.source_kind = 'telegram' THEN 50 ELSE 300 END)
                             THEN 1 ELSE 0 END) AS with_content
             FROM articles a
             WHERE a.published_at >= '2026-04-01' {src_clause}
@@ -3451,7 +3531,7 @@ REMERCIEMENTS = [
     ("Regroupement thématique",
      "Russian Propaganda Analysis — Ukraina.ru",
      "https://github.com/Romain-Jaffuel/Russian-Propaganda-Analysis-Ukraina.ru",
-     "Projet antérieur du même auteur",
+     "Russian-Propaganda-Analysis-Ukraina.ru",
      "Projet précédent sur un seul site de propagande russe sur "
      "l'Ukraine. Russian Media Monitor reprend la démarche de "
      "clustering thématique qui était appliquée à un seul site "

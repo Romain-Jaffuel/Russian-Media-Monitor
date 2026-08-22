@@ -240,15 +240,62 @@ FMT_DATE_TABLE = "DD/MM/YYYY HH:mm"
 # les compteurs et les analyses portent bien sur toute la periode choisie.
 DEBUT_SERIE = date(2026, 8, 11)
 
+# Profondeur du selecteur de periode dans l'onglet Themes. Au-dela d'un
+# mois la rangee de pastilles devient une liste a parcourir, et les
+# journees anciennes n'ont plus d'interet pour une comparaison au jour
+# le jour.
+MAX_JOURS_PERIODE = 30
+
 # Libelle court d'une nature de contenu (colonne source_kind).
 UNITE_NATURE = {"press": "Presse", "tv": "Télévision", "youtube": "YouTube",
                 "telegram": "Telegram", "vk": "VK"}
 
-# Couleur par nature de contenu. Fixee ici plutot que laissee au cycle par
-# defaut de Plotly : la frise et les graphiques empiles doivent donner la meme
-# couleur au meme support d'un onglet a l'autre.
-NATURE_COLORS = {"press": "#4C9AFF", "tv": "#B57BFF", "telegram": "#4CC38A",
-                 "youtube": "#FF6B6B", "vk": "#FFA94D"}
+
+def periode_segmentee(cle, jours, avec_tout=True):
+    """Frise de pastilles pour choisir une journée ou une semaine.
+
+    Renvoie (grain, debut, fin), avec debut/fin a None pour « toute la
+    periode ». Les deux sections de l'onglet Themes s'en servent : le meme
+    geste doit donner le meme resultat des deux cotes.
+
+    Un graphique cliquable avait ete essaye d'abord ; il demandait une invite
+    pour se signaler comme controle, la desactivation de son zoom au glisser,
+    et une cle versionnee pour pouvoir vider la selection. st.segmented_control
+    fait les trois sans rien.
+    """
+    recents = jours[-MAX_JOURS_PERIODE:]
+    TOUT = "Toute la période"
+    c_grain, c_periode = st.columns([1, 4])
+    grain = c_grain.segmented_control(
+        "Granularité", ["Jour", "Semaine"], default="Jour",
+        selection_mode="single", key=f"{cle}_grain") or "Jour"
+
+    if grain == "Semaine":
+        # Lundi de chaque semaine couverte ; une semaine partielle reste
+        # selectionnable.
+        options = sorted({j - timedelta(days=j.weekday()) for j in recents})
+    else:
+        options = recents
+    if not options:
+        return grain, None, None
+
+    defaut = TOUT if avec_tout else options[-1]
+    with c_periode:
+        choix = st.segmented_control(
+            "Période", ([TOUT] if avec_tout else []) + options, default=defaut,
+            selection_mode="single", key=f"{cle}_periode_{grain}",
+            format_func=lambda v: v if isinstance(v, str) else f"{v:%d/%m}",
+            help="Chaque journée a été regroupée sur ses seules 24 h. En "
+                 "isoler une donne les thèmes de ce jour-là, comparables à "
+                 "ceux de la veille.")
+    # Le controle rend None quand on deselectionne : on retombe sur le defaut
+    # plutot que sur un ecran vide.
+    if choix is None:
+        choix = defaut
+    if choix == TOUT:
+        return grain, None, None
+    return grain, choix, (choix + timedelta(days=6) if grain == "Semaine"
+                          else choix)
 
 
 def cols_article(**extra):
@@ -898,13 +945,13 @@ nb_passes = conn.execute("""
     SELECT COUNT(*) FROM d WHERE ecart IS NULL OR ecart > INTERVAL 30 MINUTE
 """).fetchone()[0]
 
-# « X articles » serait faux : une émission de 2 h fait une soixantaine de
+# « X articles » serait faux : une vidéo de TV fait une trentaine de
 # lignes. On regroupe donc les segments sur leur unité parente, et le détail
 # par nature part dans l'infobulle.
 _df_unites = conn.execute(
     f"SELECT source_kind, COUNT(DISTINCT {SQL_PARENT}) AS n "
     f"FROM articles WHERE {WHERE} GROUP BY 1", params).df()
-UNITE_MOT = {"press": "articles", "tv": "émissions de TV",
+UNITE_MOT = {"press": "articles", "tv": "vidéos de TV",
              "youtube": "videos", "telegram": "posts Telegram",
              "vk": "posts VK"}
 _n_unites = int(_df_unites["n"].sum()) if not _df_unites.empty else 0
@@ -912,13 +959,8 @@ _detail_unites = " · ".join(
     f"{int(r['n'])} {UNITE_MOT.get(r['source_kind'], r['source_kind'])}"
     for _, r in _df_unites.sort_values("n", ascending=False).iterrows())
 _total_fmt = f"{_n_unites:,}".replace(",", " ")  # espace fine insecable
-# date_start/date_end peuvent être None : st.date_input rend un champ
-# effaçable, et le filtre SQL plus haut prévoit déjà ce cas.
-_periode = (f"{date_start:%d/%m/%Y}" if date_start else "debut") + " → " + \
-           (f"{date_end:%d/%m/%Y}" if date_end else "aujourd'hui")
 _chips = [f":gray-badge[**{_total_fmt}** contenus]",
-          f":gray-badge[**{n_src}** sources]",
-          f":gray-badge[{_periode}]"]
+          f":gray-badge[**{n_src}** sources]"]
 # On ne signale que les filtres réellement restrictifs : afficher "45 sources
 # sur 45" à chaque écran serait du bruit. Les filtres actifs passent en
 # couleur d'accent, le périmètre par défaut reste gris.
@@ -986,7 +1028,7 @@ with tab_vue:
     """, params).df()
 
     LIB = {"press": ("Articles de presse", "articles"),
-           "tv": ("Émissions de télévision", "emissions"),
+           "tv": ("Émissions de télévision", "vidéos"),
            "youtube": ("Vidéos YouTube", "videos"),
            "telegram": ("Publications Telegram", "posts"),
            "vk": ("Publications VK", "posts")}
@@ -996,16 +1038,20 @@ with tab_vue:
         for i, (_, r) in enumerate(df_nat.iterrows()):
             titre, unite = LIB.get(r["nature"], (r["nature"], "unites"))
             n = int(r["unites"])
-            detail = f"{int(r['sources'])} sources"
+            # Le nombre de sources vaut pour toutes les natures ; la video y
+            # ajoute son compte de segments, une emission de 2 h en produisant
+            # une trentaine alors qu'un article n'en fait qu'un.
+            _ns = int(r["sources"])
+            detail = f"{_ns} source" + ("s" if _ns > 1 else "")
             if r["nature"] in ("tv", "youtube"):
-                detail = f"{int(r['segments'])} segments"
+                detail += f" · {int(r['segments'])} segments"
             cols[i].metric(titre, f"{n:,}".replace(",", " "), detail,
-                           delta_color="off")
+                           delta_color="off", delta_arrow="off")
         # La ligne de détail n'est pas qu'informative : sans elle, cette carte
         # est plus courte que les cinq autres et la rangée se désaligné.
         cols[-1].metric("Dernière collecte",
                         last_f.strftime("%d/%m/%y") if last_f else "n/a",
-                        f"{nb_passes} collectes", delta_color="off")
+                        f"{nb_passes} collectes", delta_color="off", delta_arrow="off")
 
         with st.expander("Détail par nature de contenu", expanded=False):
             det = df_nat.copy()
@@ -1030,7 +1076,7 @@ with tab_vue:
                 "nature -- un article de presse, une émission de télévision, "
                 "une vidéo, un post. **Segments** : les lignes réellement "
                 "stockées et analysées ; une émission de 2 h en produit une "
-                "soixantaine, un article un seul. Pour comparer les natures "
+                "trentaine, un article un seul. Pour comparer les natures "
                 "entre elles, c'est le nombre de **mots** qui fait foi."
             )
 
@@ -1050,12 +1096,14 @@ with tab_vue:
         style(fig, 450)
         st.plotly_chart(fig, width="stretch", key=_next_chart_key())
         st.caption(
-            "En segments, l'unité réellement stockée et analysée : une "
-            "émission de télévision de 2 h en produit une soixantaine, un "
-            "article un seul. Une journée où la télévision pèse lourd n'est "
-            "donc pas une journée où elle a plus parlé que la presse. "
-            f"La courbe démarre au {DEBUT_SERIE:%d/%m/%Y}, date à laquelle la "
-            "collecte a atteint son régime.")
+            "Nombre de segments publiés chaque jour, empilés par source. "
+            "Un segment est l'unité stockée et analysée : un article de "
+            "presse en vaut un, une vidéo de télévision une trentaine. "
+            "Exemple : une barre où la télévision apporte 450 segments "
+            "correspond à une quinzaine de vidéos traitant chacune "
+            "plusieurs sujets. "
+            f"Le graphique démarre au {DEBUT_SERIE:%d/%m/%Y}, mise en "
+            "régime de la collecte.")
 
 
 # ===== Tab Thèmes ==============================================
@@ -1065,105 +1113,41 @@ with tab_themes:
         st.info("Lancez : python analyze_topics.py")
     else:
         st.caption(
-            "Thèmes décidés directement par les articles (clustering BERTopic "
-            "sur une fenêtre glissante), pas une liste écrite à la main : un "
-            "thème sans article récent devient inactif sans perdre son "
-            "historique, et peut redevenir actif si le sujet revient."
+            "Thèmes déduits des articles eux-mêmes, par clustering. Un thème "
+            "sans article récent devient inactif en gardant son historique, "
+            "et redevient actif si le sujet revient."
         )
-        # --- Frise des journées ---------------------------------------------
-        # Le clustering travaille journée par journée : pouvoir en isoler une
-        # rend deux journées comparables, ce que la période globale de la barre
-        # latérale ne permet pas. Un menu déroulant aurait suffi à filtrer,
-        # mais il ne dit rien du corpus -- la frise montre en plus le volume de
-        # chaque journée et sa composition par support, et se clique.
-        #
+        # --- Choix de la période ---------------------------------------------
         # Le filtre porte sur la date de publication et non sur
-        # article_topics.run_date : tout ce bloc partage la clause _aw, qui sert
-        # aussi aux dénominateurs des pourcentages et à la pondération. Ne
-        # filtrer que les thèmes aurait laissé les dénominateurs sur la période
-        # entière, et les parts n'auraient plus sommé à 100 %.
-        # DEBUT_SERIE, comme la courbe de volume : avant cette date la collecte
-        # montait en charge et les journees sont trop maigres pour que leur
-        # clustering veuille dire quelque chose.
-        df_frise = conn.execute(
-            """SELECT CAST(a.published_at AS DATE) AS jour,
-                      COALESCE(a.source_kind, 'press') AS support,
-                      COUNT(*) AS n
-               FROM article_topics at_
-               JOIN articles a ON a.id = at_.article_id
-               WHERE at_.topic_key <> -1 AND at_.run_date >= ?
-               GROUP BY 1, 2 ORDER BY 1""", [DEBUT_SERIE]).df()
+        # article_topics.run_date : tout ce bloc partage la clause _aw, qui
+        # sert aussi aux dénominateurs des pourcentages et à la pondération.
+        # Ne filtrer que les thèmes laisserait les dénominateurs sur la
+        # période entière, et les parts ne sommeraient plus à 100 %.
+        _jours_topics = [r[0] for r in conn.execute(
+            "SELECT DISTINCT run_date FROM article_topics "
+            "WHERE run_date >= ? ORDER BY 1", [DEBUT_SERIE]).fetchall()]
 
-        _aw, _pa, _sel_j = aw, params, None
-        if not df_frise.empty:
-            _jours_f = sorted(df_frise["jour"].unique())
-            _par_jour = df_frise.groupby("jour")["n"].sum()
-
-            # Une cle versionnee plutot qu'une remise a zero de l'etat du
-            # widget : c'est le seul moyen fiable de vider la selection d'un
-            # graphique Plotly, dont l'evenement survit au rerun.
-            st.session_state.setdefault("frise_v", 0)
-            _c_titre, _c_reset = st.columns([4, 1])
-            _c_titre.markdown(
-                "**Journées regroupées** &nbsp;·&nbsp; "
-                ":primary-badge[Cliquez une barre pour isoler une journée]")
-            if _c_reset.button("Toute la période", width="stretch",
-                               key="frise_reset"):
-                st.session_state.frise_v += 1
-            _cle_frise = f"frise_jours_{st.session_state.frise_v}"
-
-            # Selection lue AVANT de dessiner : la barre retenue doit ressortir
-            # des le meme rendu, sinon il faut deux clics pour la voir.
-            _ev = st.session_state.get(_cle_frise) or {}
-            _pts = ((_ev.get("selection") or {}).get("points")) or []
-            _idx = _pts[0].get("point_index") if _pts else None
-            if _idx is not None and 0 <= _idx < len(_jours_f):
-                _sel_j = _jours_f[_idx]
-
-            fig_f = go.Figure()
-            for _sup, _lib in UNITE_NATURE.items():
-                _serie = (df_frise[df_frise["support"] == _sup]
-                          .set_index("jour")["n"].reindex(_jours_f, fill_value=0))
-                if _serie.sum() == 0:
-                    continue
-                fig_f.add_bar(
-                    x=[f"{j:%d/%m}" for j in _jours_f], y=_serie.values,
-                    name=_lib, marker_color=NATURE_COLORS.get(_sup, MUTED),
-                    marker_opacity=[1.0 if (_sel_j is None or j == _sel_j) else 0.22
-                                    for j in _jours_f],
-                    hovertemplate="%{x} &mdash; " + _lib +
-                                  " : %{y} documents<extra></extra>")
-            fig_f.update_layout(barmode="stack", showlegend=True,
-                                # Sans traceorder, la legende horizontale
-                                # sort a l'envers de l'empilement.
-                                legend=dict(orientation="h", y=1.25, x=0,
-                                            title_text="", traceorder="normal"),
-                                bargap=0.28,
-                                # Sans ca, glisser trace un rectangle de
-                                # zoom au lieu de selectionner, et le clic
-                                # simple passe pour une fausse manoeuvre.
-                                dragmode=False)
-            fig_f.update_yaxes(visible=False)
-            # type="category" impose : sans lui Plotly lit « 14/08 » comme
-            # une date, espace les etiquettes selon la largeur et ajoute
-            # un 21/08 qui n'existe pas dans les donnees.
-            fig_f.update_xaxes(type="category", tickangle=0, showgrid=False)
-            style(fig_f, 190)
-            st.plotly_chart(fig_f, width="stretch", key=_cle_frise,
-                            on_select="rerun", selection_mode="points")
-
-            if _sel_j is None:
-                st.caption(
-                    f"{len(_jours_f)} journées, "
-                    + f"{int(_par_jour.sum()):,}".replace(",", " ")
-                    + " documents classés.")
+        _aw, _pa = aw, params
+        if _jours_topics:
+            _grain_j, _deb_j, _fin_j = periode_segmentee("theme", _jours_topics)
+            if _deb_j is not None:
+                _aw = f"{aw} AND CAST(a.published_at AS DATE) BETWEEN ? AND ?"
+                _pa = list(params) + [_deb_j, _fin_j]
+                _n_j = conn.execute(
+                    "SELECT COUNT(*) FROM article_topics "
+                    "WHERE run_date BETWEEN ? AND ? AND topic_key <> -1",
+                    [_deb_j, _fin_j]).fetchone()[0]
+                _quand = (f"Semaine du **{fr_date(_deb_j)}** au "
+                          f"**{fr_date(_fin_j)}**" if _grain_j == "Semaine"
+                          else f"Journée du **{fr_date(_deb_j)}**")
+                st.caption(f"{_quand} : {_n_j} documents classés.")
             else:
-                _aw = f"{aw} AND CAST(a.published_at AS DATE) = ?"
-                _pa = list(params) + [_sel_j]
-                st.caption(
-                    f"Filtré sur le **{fr_date(_sel_j)}** "
-                    f"({int(_par_jour.get(_sel_j, 0))} documents classés). "
-                    "« Toute la période » pour revenir à l'ensemble.")
+                _vus = _jours_topics[-MAX_JOURS_PERIODE:]
+                _coupe = ("" if len(_vus) == len(_jours_topics)
+                          else f" (les {MAX_JOURS_PERIODE} plus récentes sur "
+                               f"{len(_jours_topics)})")
+                st.caption(f"{len(_vus)} journées regroupées, du "
+                           f"{fr_date(_vus[0])} au {fr_date(_vus[-1])}{_coupe}.")
 
         df_t = conn.execute(
             f"""SELECT t.topic_key, t.label, t.top_words, t.active,
@@ -1191,7 +1175,7 @@ with tab_themes:
                         horizontal=True, index=0, key="theme_unit",
                         help="Un segment = une ligne analysée : un article de "
                              "presse en vaut un, une émission de télévision une "
-                             "soixantaine. Le volume de texte corrige ce biais "
+                             "trentaine. Le volume de texte corrige ce biais "
                              "en ponderant par la longueur -- c'est la mesure a "
                              "prendre pour comparer des natures différentes.",
                     )
@@ -1200,7 +1184,7 @@ with tab_themes:
                         "Afficher en", ["Nombre", "% du corpus"],
                         horizontal=True, index=1, key="theme_scale",
                         help="Le pourcentage rapporté au corpus entier tel que "
-                             "filtre à gauche, pas seulement aux articles classes.",
+                             "filtré à gauche, articles non classés compris.",
                     )
                 with cm3:
                     split_choice = st.selectbox(
@@ -1388,7 +1372,8 @@ with tab_themes:
             st.metric("Thèmes en sommeil", f"{(~df_t['active']).sum()}")
             top = nz.iloc[0] if len(nz) else None
             if top is not None:
-                st.metric("Thème dominant", top["label"], f"{top['pct']}%")
+                st.metric("Thème dominant", top["label"], f"{top['pct']}%",
+                          delta_arrow="off")
             top5 = nz.head(5)[["label", "n", "pct"]].rename(
                 columns={"label": "Thème", "n": "N", "pct": "%"})
             st.dataframe(top5, hide_index=True, width="stretch")
@@ -1439,6 +1424,11 @@ with tab_themes:
             """, [DEBUT_SERIE]).df()
 
             if not df_hm.empty:
+                # Meme plafond que le selecteur : au-dela d'un mois les
+                # colonnes deviennent trop etroites pour qu'on distingue une
+                # nuance d'une autre.
+                _cols = sorted(df_hm["jour"].unique())[-MAX_JOURS_PERIODE:]
+                df_hm = df_hm[df_hm["jour"].isin(_cols)]
                 _rang = (df_hm.groupby("theme")["n"].sum()
                          .sort_values(ascending=False).head(15).index)
                 _piv = (df_hm[df_hm["theme"].isin(_rang)]
@@ -1465,21 +1455,9 @@ with tab_themes:
                 )
 
             # --- Détail d'une journée ou d'une semaine ---------------------
-            _c1, _c2 = st.columns([1, 2])
-            _grain = _c1.radio("Granularité", ["Jour", "Semaine"],
-                               horizontal=True, key="th_jour_grain")
-            if _grain == "Jour":
-                _choix = _c2.selectbox("Journée", list(reversed(_jours)),
-                                       format_func=fr_date, key="th_jour_sel")
-                _deb, _fin = _choix, _choix
-                _pas = timedelta(days=1)
-            else:
-                _lundis = sorted({j - timedelta(days=j.weekday()) for j in _jours},
-                                 reverse=True)
-                _choix = _c2.selectbox("Semaine du", _lundis, format_func=fr_date,
-                                       key="th_sem_sel")
-                _deb, _fin = _choix, _choix + timedelta(days=6)
-                _pas = timedelta(days=7)
+            _grain, _deb, _fin = periode_segmentee(
+                "th_jour", _jours, avec_tout=False)
+            _pas = timedelta(days=7 if _grain == "Semaine" else 1)
 
             def _themes_periode(debut, fin):
                 # La ventilation par support vient d'une table ecrite par le
@@ -1526,7 +1504,7 @@ with tab_themes:
                 m2.metric("Documents classés", f"{_n_cls:,}".replace(",", "\u202f"))
                 m3.metric("Non classés",
                           f"{100 * (_n_tot - _n_cls) / max(_n_tot, 1):.0f} %",
-                          f"{_n_tot - _n_cls} documents", delta_color="off")
+                          f"{_n_tot - _n_cls} documents", delta_color="off", delta_arrow="off")
 
                 # Part du jour plutot que volume brut : deux journees n'ont pas
                 # le meme volume, comparer les effectifs induirait en erreur.
@@ -1595,7 +1573,7 @@ with tab_themes:
                 faibles = int(((df_q["coherence"] < 0.5) |
                                (df_q["distinction"] < 0.5)).sum())
                 k3.metric("Thèmes fragiles", f"{faibles} / {len(df_q)}",
-                          "cohérence ou distinction < 0,5", delta_color="off")
+                          "cohérence ou distinction < 0,5", delta_color="off", delta_arrow="off")
 
                 # Les deux mesures sont discretes -- six documents de test et
                 # six de controle, donc des multiples de 1/6. Sans dispersion,
@@ -1719,9 +1697,9 @@ with tab_themes:
                     style(fig, 350)
                     st.plotly_chart(fig, width="stretch", key=_next_chart_key())
                     st.caption(
-                        "En segments, pas en émissions : une émission de TV "
-                        "pèse naturellement plus qu'un article. A lire comme "
-                        "un partage de volume de texte.")
+                        "Compté en segments : une vidéo de TV en fournit une "
+                        "trentaine, un article un seul. À lire comme un partage "
+                        "de volume de texte.")
 
             top_words = conn.execute(
                 "SELECT top_words FROM topics WHERE topic_key = ?", [tid]
@@ -2075,35 +2053,6 @@ with tab_alignement:
     # affiche désormais la classification curee, disponible pour toutes les
     # sources sans aucun appel API.
     aw = with_a(WHERE)
-    st.subheader("Classification éditoriale des sources")
-    st.caption(
-        "Étiquettes saisies à la main dans config/sources.yaml, pas déduites "
-        "des articles : elles valent pour toutes les sources, y compris celles "
-        "dont aucun article n'a encore été analyse. Le type de média résumé "
-        "l'alignement (État, para-État, independant, exil) ; le positionnement "
-        "historique donne le détail éditorial."
-    )
-
-    df_class = conn.execute(
-        f"""SELECT a.source_name AS Source,
-                   COALESCE(a.type_media, 'non classe') AS "Type de média",
-                   COALESCE(a.statut_legal_ru, 'aucun') AS "Statut légal (RU)",
-                   ANY_VALUE(a.source_kind) AS "Nature",
-                   COUNT(*) AS Articles
-            FROM articles a WHERE {aw}
-            GROUP BY 1, 2, 3 ORDER BY 2, 5 DESC""",
-        params).df()
-    df_class["Positionnement historique"] = (
-        df_class["Source"].map(HISTORICAL_STANCE).fillna(""))
-
-    st.dataframe(
-        df_class, width="stretch", hide_index=True,
-        column_config={
-            "Positionnement historique": st.column_config.TextColumn(
-                "Positionnement historique", width="large"),
-        },
-    )
-
     st.markdown("### Répartition du corpus par alignement")
     df_mix = conn.execute(
         f"""SELECT COALESCE(a.type_media, 'non classe') AS type_media,
@@ -2146,11 +2095,45 @@ with tab_alignement:
             style(fig, max(420, 26 * len(df_mix_src)))
             st.plotly_chart(fig, width="stretch", key=_next_chart_key())
         st.caption(
-            "A lire avec l'onglet Contexte : la composition du corpus ne "
-            "reproduit pas celle de l'audience russe. Un alignement "
-            "surrepresente ici l'est parce qu'il est facile à collecter, pas "
-            "parce qu'il domine ce que les Russes consultent."
+            "À lire avec l'onglet Contexte. La composition du corpus "
+            "reflète ce qui est facile à collecter, quand l'audience "
+            "russe se répartit tout autrement : un alignement bien "
+            "représenté ici peut peser beaucoup moins dans ce que les "
+            "Russes consultent."
         )
+
+    st.subheader("Classification éditoriale des sources")
+    st.caption(
+        "Chaque source porte des étiquettes éditoriales saisies à la main "
+        "dans config/sources.yaml. Le type de média donne son alignement : "
+        "État, para-État, indépendant ou exil. Le positionnement historique "
+        "en précise la trajectoire. Toutes les sources configurées y "
+        "figurent, y compris celles dont aucun article n'a encore été "
+        "analysé."
+    )
+
+    df_class = conn.execute(
+        f"""SELECT a.source_name AS Source,
+                   COALESCE(a.type_media, 'non classe') AS "Type de média",
+                   COALESCE(a.statut_legal_ru, 'aucun') AS "Statut légal (RU)",
+                   ANY_VALUE(a.source_kind) AS "Nature",
+                   COUNT(*) AS Articles
+            FROM articles a WHERE {aw}
+            GROUP BY 1, 2, 3 ORDER BY 2, 5 DESC""",
+        params).df()
+    df_class["Positionnement historique"] = (
+        df_class["Source"].map(HISTORICAL_STANCE).fillna(""))
+
+    st.dataframe(
+        df_class, width="stretch", hide_index=True,
+        column_config={
+            "Positionnement historique": st.column_config.TextColumn(
+                "Positionnement historique", width="large"),
+        },
+    )
+
+
+
 
 
 # ===== Tab Acteurs (avec position vs cible) ====================
@@ -2239,7 +2222,7 @@ with tab_acteurs:
                        "Attention au volume pour les auteurs de chaînes YouTube : une seule "
                        "vidéo compte pour une dizaine de segments, ce qui les place "
                        "mecaniquement en tête du classement. Le lean moyen, lui, reste "
-                       "comparable (il est pondéré, pas cumule). Pour les écarter, "
+                       "comparable, étant pondéré. Pour les écarter, "
                        "décochez YouTube dans \"Nature du contenu\".")
 
             target_author = st.selectbox(
@@ -2297,7 +2280,7 @@ with tab_acteurs:
 
         # Treemap sources/auteurs
         st.subheader("Sources et leurs auteurs")
-        st.caption("Hiérarchie source -> auteur. Cliquez pour zoomer.")
+        st.caption("Hiérarchie source puis auteur. Cliquez pour zoomer.")
 
         TOP_SRC = 15
         TOP_AUTH = 10
@@ -2371,7 +2354,11 @@ with tab_diagnostic:
         WITH base AS (
             SELECT source_name,
                    COUNT(*) AS total,
-                   SUM(CASE WHEN content IS NOT NULL AND LENGTH(content) >= 300
+                   -- Meme seuil que les analyses, sinon le rapport depasse
+                   -- 100 % : Telegram est analyse des 50 signes, et compter
+                   -- son denominateur a 300 en excluait les trois quarts.
+                   SUM(CASE WHEN content IS NOT NULL AND LENGTH(content) >=
+                            (CASE WHEN source_kind = 'telegram' THEN 50 ELSE 300 END)
                             THEN 1 ELSE 0 END) AS with_content
             FROM articles WHERE published_at >= ?
             GROUP BY source_name
@@ -2563,7 +2550,7 @@ with tab_diagnostic:
                COUNT(*) AS Articles,
                -- Pour la video, "Articles" compte des segments de
                -- transcription : une emission de 2 h en produit une
-               -- soixantaine. On remonte la video parente depuis l'URL du
+               -- trentaine. On remonte la video parente depuis l'URL du
                -- segment pour que la colonne reste comparable aux autres
                -- sources. Les deux plateformes n'ont pas la meme forme
                -- d'URL : watch?v=<id> pour YouTube, /video/<hash>/ pour
@@ -2592,7 +2579,7 @@ with tab_diagnostic:
                "transcription est découpée en plusieurs segments comptés dans "
                "Articles. "
                "Positionnement historique = label éditorial saisi à la main "
-               "(config/sources.yaml), pas dérivé des données.")
+               "dans config/sources.yaml.")
     st.dataframe(
         df_overview, width="stretch", hide_index=True,
         column_config={
@@ -2619,7 +2606,7 @@ with tab_diagnostic:
     with c5:
         sort_by = st.selectbox(
             "Tri",
-            ["Date récente", "Date ancienne", "Source A->Z"],
+            ["Date récente", "Date ancienne", "Source A-Z"],
             key="src_sort",
         )
 
@@ -2642,7 +2629,7 @@ with tab_diagnostic:
     order_by = {
         "Date récente": "published_at DESC NULLS LAST",
         "Date ancienne": "published_at ASC NULLS LAST",
-        "Source A->Z": "source_name ASC, published_at DESC",
+        "Source A-Z": "source_name ASC, published_at DESC",
     }[sort_by]
 
     n_match = conn.execute(
@@ -2710,8 +2697,8 @@ with tab_signaux:
     recent_bounds = [recent_start, recent_end_excl]
     ref_bounds = [ref_start, ref_end_excl]
     st.caption(
-        f"Récente : {recent_start} -> {_today} ({window_days}j)  |  "
-        f"Référence : {ref_start} -> {ref_end_excl - _td(days=1)} ({window_days}j)"
+        f"Récente : du {recent_start} au {_today} ({window_days}j)  |  "
+        f"Référence : du {ref_start} au {ref_end_excl - _td(days=1)} ({window_days}j)"
     )
 
     # Volume de chaque fenêtre. Tout le reste de l'onglet en dépend : comparer
@@ -2881,7 +2868,7 @@ with tab_cadrage:
         "le texte), mais qui se lisent différemment. **Cadrage (propagande)** : "
         "vocabulaire documente par la littérature sur la propagande russe "
         "(monde russe, dénazification, russophobie...) -- mesure la PRÉSENCE "
-        "du terme, pas l'adhesion : un média independant peut très bien citer "
+        "du terme seule : un média indépendant peut très bien citer "
         "ou critiquer ces mêmes termes. **Indicateur de suivi** : "
         "thermometres suivis en permanence même a bas bruit (mobilisation, "
         "signaux de negociation, stress économique), là où le clustering de "
@@ -3104,26 +3091,25 @@ with tab_cadrage:
 with tab_contexte:
     st.subheader("Comment les Russes s'informent")
     st.caption(
-        "Repères pour lire les autres onglets. Sources : Mediascope "
-        "(mesure d'audience, T1 2026) et Levada (sondages, avril et juin 2026). "
-        "Ces chiffres ne viennent pas du corpus collecte : ils servent à le "
-        "situer."
+        "Repères d'audience pour lire les autres onglets, mesurés en "
+        "Russie par Mediascope (audience, T1 2026) et Levada (sondages, "
+        "avril et juin 2026)."
     )
 
-    # delta_color="off" : ces libellés secondaires sont des valeurs absolues,
+    # delta_color="off", delta_arrow="off" : ces libellés secondaires sont des valeurs absolues,
     # pas des variations. Colorés, ils se liraient comme des hausses --
     # et une confiance en baisse affichée en vert serait contresens.
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Télévision", "97 %", "3 h 18 / jour", delta_color="off",
+    m1.metric("Télévision", "97 %", "3 h 18 / jour", delta_color="off", delta_arrow="off",
               help="Part des Russes qui regardent la télévision au moins une "
                    "fois par semaine. 99 % chez les 55 ans et plus.")
-    m2.metric("Internet", "86 %", "4 h 21 / jour", delta_color="off",
+    m2.metric("Internet", "86 %", "4 h 21 / jour", delta_color="off", delta_arrow="off",
               help="105 millions de personnes, soit 86 % des 12 ans et plus.")
-    m3.metric("Réseaux sociaux", "51 %", "2 h 44 / jour", delta_color="off",
+    m3.metric("Réseaux sociaux", "51 %", "2 h 44 / jour", delta_color="off", delta_arrow="off",
               help="Part du temps passe en ligne. VKontakte, Telegram et "
                    "TikTok en tête.")
     m4.metric("Confiance : TV", "41 %", "-8 pts depuis mai 2025",
-              delta_color="off",
+              delta_color="off", delta_arrow="off",
               help="Premier rang malgre l'erosion. Réseaux sociaux 21 %, "
                    "sites d'info 14 %, chaînes Telegram 11 %.")
 
@@ -3171,7 +3157,7 @@ with tab_contexte:
     style(fig_age, 320)
     st.plotly_chart(fig_age, width="stretch", key=_next_chart_key())
     st.caption(
-        "Ordres de grandeur, pas des mesures exactes : ils illustrent le "
+        "Ordres de grandeur illustrant le "
         "croisement, documente par Mediascope, entre une audience télévisée "
         "âgée et une audience en ligne jeune. Les 18-34 ans regardent une "
         "heure de télévision de moins qu'en 2020. **Consequence pour l'outil** : "
@@ -3353,7 +3339,7 @@ with tab_couverture:
                     "**Collecte en développement.** VK oppose une verification "
                     "anti-robot après une vingtaine de visites anonymes depuis une "
                     "même adresse : en pratique deux à trois communautes passent "
-                    "par run, pas les cinq. Les chiffres ci-dessous sont donc un "
+                    "par run sur les cinq. Les chiffres ci-dessous sont donc un "
                     "plancher, et l'absence d'une communaute un jour donne ne dit "
                     "rien de son activité.")
 
@@ -3444,9 +3430,7 @@ with tab_couverture:
     _muettes = [s["name"] for s in SOURCE_CONFIG if s["name"] not in _cov_src.index]
     if _muettes:
         st.caption(f"**{len(_muettes)} sources sans aucun contenu en base** : "
-                   + ", ".join(sorted(_muettes))
-                   + ". Émission en relâche, source récemment ajoutée, ou collecte "
-                     "en échec -- à vérifier dans les journaux de la dernière passe.")
+                   + ", ".join(sorted(_muettes)) + ".")
 
 
 
@@ -3468,9 +3452,10 @@ REMERCIEMENTS = [
      "Russian Propaganda Analysis — Ukraina.ru",
      "https://github.com/Romain-Jaffuel/Russian-Propaganda-Analysis-Ukraina.ru",
      "Projet antérieur du même auteur",
-     "La démarche de clustering thématique appliquée ici -- détecter les thèmes "
-     "dans les données plutôt que de les fixer d'avance -- vient de ce travail "
-     "mené sur le corpus d'Ukraina.ru."),
+     "Projet précédent sur un seul site de propagande russe sur "
+     "l'Ukraine. Russian Media Monitor reprend la démarche de "
+     "clustering thématique qui était appliquée à un seul site "
+     "d'articles en l'appliquant à toutes les sources."),
     ("Procédés de propagande",
      "Da San Martino et al., EMNLP 2019",
      "https://scholar.google.fr/citations?view_op=view_citation&hl=en&user=URABLy0AAAAJ&citation_for_view=URABLy0AAAAJ:2P1L_qKh6hAC",

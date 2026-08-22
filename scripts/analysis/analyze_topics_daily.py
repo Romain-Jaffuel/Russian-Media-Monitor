@@ -75,8 +75,20 @@ CLUSTER_SELECTION = "leaf"
 # chaque run, c'est elle qui doit guider l'ajustement.
 CROSS_THRESHOLD = 0.90
 
-# Similarité minimale pour rapprocher un sujet du jour d'un thème déjà connu.
-REGISTRY_THRESHOLD = 0.62
+# Similarite minimale pour rapprocher un sujet du jour d'un theme deja connu.
+# Mesure sur les 32 themes en base : entre themes DIFFERENTS, la similarite des
+# centroides va de 0,810 a 0,981, mediane 0,889 -- e5 tasse tout dans le haut
+# de l'echelle. L'ancien seuil de 0,62, herite de MiniLM, etait franchi par
+# 100 % des paires : chaque sujet du jour se collait sur une cle arbitraire,
+# d'ou des journees entieres a « 0 nouveaux » et des libelles sans rapport avec
+# leur contenu. A 0,95 il ne reste que 5 % des paires non apparentees.
+REGISTRY_THRESHOLD = 0.95
+
+# Un theme repris garde son libelle tant que son vocabulaire reste proche. En
+# dessous de ce recouvrement entre anciens et nouveaux mots-cles, le sujet a
+# assez bouge pour meriter un nouveau libelle : sans cela « Fronts et combats
+# locaux » finissait par designer le Jour du drapeau russe.
+RECOUVREMENT_MIN = 0.4
 
 SCHEMA_SUPPORTS = """
 CREATE TABLE IF NOT EXISTS topic_supports (
@@ -94,6 +106,14 @@ def _ensure_schema_jour(conn, reset=False):
     ensure_schema(conn, reset=reset)
     if reset:
         conn.execute("DROP TABLE IF EXISTS topic_supports")
+        # ensure_schema a supprime la sequence des cles : le prochain thema
+        # cree reprendra a 1. Les evaluations ProxAnn deja stockees pointent
+        # donc vers des cles qui existent toujours mais qui designent
+        # desormais de tout autres clusters -- « Prix et carburants russes »
+        # se retrouvait decrit comme le groupe AKHMAT. Une simple chasse aux
+        # orphelines ne voit rien : les cles sont valides, c'est leur sens qui
+        # a change. On repart donc de zero, quitte a relancer validate_topics.
+        conn.execute("DROP TABLE IF EXISTS topic_quality")
     for stmt in SCHEMA_SUPPORTS.strip().split(";"):
         if stmt.strip():
             conn.execute(stmt + ";")
@@ -184,6 +204,15 @@ def _clusteriser_support(support, indices, embeddings, docs):
              "%d non regroupés", support, n, taille, len(clusters),
              sum(1 for t in locaux if int(t) == NOISE_KEY))
     return clusters
+
+
+def _recouvrement(mots_a, mots_b, n=10):
+    """Part des n premiers mots-cles communs aux deux versions d'un theme."""
+    a = {m.strip() for m in (mots_a or "").split(",")[:n] if m.strip()}
+    b = {m.strip() for m in (mots_b or "").split(",")[:n] if m.strip()}
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
 
 
 def _recouper(clusters, seuil):
@@ -347,10 +376,19 @@ def traiter_jour(conn, jour, seuil_cross, seuil_registre, embed):
         mots = ", ".join(dict.fromkeys(s["mots"].replace(" | ", ", ").split(", ")))[:400]
         if idx in appariement:
             cle, _sim = appariement[idx]
+            anciens = conn.execute(
+                "SELECT top_words FROM topics WHERE topic_key = ?",
+                [cle]).fetchone()[0] or ""
+            libelle = None
+            if _recouvrement(anciens, mots) < RECOUVREMENT_MIN:
+                libelle = _generate_readable_label(
+                    mots, titres_par_sujet[idx],
+                    fallback=" / ".join(mots.split(", ")[:3]))
+                log.info("  libelle rafraichi (#%s) : %s", cle, libelle)
             conn.execute(
                 "UPDATE topics SET top_words = ?, centroid = ?, last_seen = ?, "
-                "active = TRUE WHERE topic_key = ?",
-                [mots, list(map(float, s["centroide"])), jour, cle])
+                "active = TRUE, label = COALESCE(?, label) WHERE topic_key = ?",
+                [mots, list(map(float, s["centroide"])), jour, libelle, cle])
             n_repris += 1
         else:
             # Un appel Mistral seulement pour les sujets réellement nouveaux :

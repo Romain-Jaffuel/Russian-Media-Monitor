@@ -430,7 +430,10 @@ TARGET_COORDS = {
     "pays_baltes": (57.5, 24.1), "chine": (39.90, 116.41),
     "inde": (28.61, 77.21),
     "brics_global_south": (-15.79, -47.88),   # Brasilia
-    "georgie": (43.5, 41.0), "armenie": (38.5, 46.0),
+    # Tbilissi et Erevan ne sont qu'a 1,5 degre l'un de l'autre : places
+    # a leurs vraies coordonnees, leurs deux etiquettes se recouvrent. On
+    # les ecarte en diagonale et on les fait rayonner de part et d'autre.
+    "georgie": (42.5, 43.0), "armenie": (39.5, 46.0),
     "opposition_russe": (63.0, 10.0),         # hub d'exil balte, écarté au nord
     "kazakhstan": (51.17, 71.45),
     "moldavie": (43.0, 26.0), "iran": (32.0, 54.0),
@@ -445,7 +448,7 @@ TARGET_TEXTPOS = {
     "union_europeenne": "bottom center", "allemagne": "top left",
     "opposition_russe": "top center", "pays_baltes": "middle right",
     "ukraine": "middle right", "moldavie": "bottom center",
-    "georgie": "bottom right", "armenie": "bottom right",
+    "georgie": "middle right", "armenie": "middle right",
     "kazakhstan": "top center", "iran": "bottom center",
 }
 
@@ -704,6 +707,12 @@ has_divergence = "lexical_divergence" in tables
 has_techniques = "article_techniques" in tables
 has_topic_quality = "topic_quality" in tables
 has_topic_supports = "topic_supports" in tables
+# La colonne portee distingue les deux clusterings. Un instantane publie
+# avant son introduction ne l'a pas : sans cette garde, le tableau de bord
+# deploye tombait sur un BinderException des le chargement.
+has_portee = bool(conn.execute(
+    "SELECT 1 FROM duckdb_columns() WHERE table_name = 'article_topics' "
+    "AND column_name = 'portee'").fetchone()) if has_topics else False
 has_geo = "entity_geo" in tables
 
 
@@ -1128,7 +1137,8 @@ with tab_themes:
         # meme, et le ferait revenir le jour ou il aurait assez de volume.
         _portees = [r[0] for r in conn.execute(
             "SELECT DISTINCT portee FROM article_topics "
-            "WHERE portee IS NOT NULL AND topic_key <> -1 ORDER BY 1").fetchall()]
+            "WHERE portee IS NOT NULL AND topic_key <> -1 ORDER BY 1"
+        ).fetchall()] if has_portee else []
         _po = "global"
         if len(_portees) > 1:
             _opts = ["global"] + [x for x in _portees if x != "global"]
@@ -1141,6 +1151,9 @@ with tab_themes:
                      "Telegram dans le même espace. Les autres montrent le "
                      "regroupement propre à un support, calculé sans les "
                      "autres.") or "global"
+        _fpo = (lambda al="": f" AND COALESCE({al}portee, 'global') = '{_po}'"
+                if has_portee else "")
+        if len(_portees) > 1:
             st.caption(
                 "Regroupement global, tous supports mêlés."
                 if _po == "global" else
@@ -1155,8 +1168,9 @@ with tab_themes:
         # période entière, et les parts ne sommeraient plus à 100 %.
         _jours_topics = [r[0] for r in conn.execute(
             "SELECT DISTINCT run_date FROM article_topics "
-            "WHERE run_date >= ? AND portee = ? ORDER BY 1",
-            [DEBUT_SERIE, _po]).fetchall()]
+            "WHERE run_date >= ?" + (" AND portee = ?" if has_portee else "")
+            + " ORDER BY 1",
+            [DEBUT_SERIE] + ([_po] if has_portee else [])).fetchall()]
 
         _aw, _pa = aw, params
         if _jours_topics:
@@ -1166,8 +1180,8 @@ with tab_themes:
                 _pa = list(params) + [_deb_j, _fin_j]
                 _n_j = conn.execute(
                     "SELECT COUNT(*) FROM article_topics "
-                    "WHERE run_date BETWEEN ? AND ? AND topic_key <> -1 "
-                    "AND portee = ?", [_deb_j, _fin_j, _po]).fetchone()[0]
+                    "WHERE run_date BETWEEN ? AND ? AND topic_key <> -1"
+                    + _fpo(), [_deb_j, _fin_j]).fetchone()[0]
                 _quand = (f"Semaine du **{fr_date(_deb_j)}** au "
                           f"**{fr_date(_fin_j)}**" if _grain_j == "Semaine"
                           else f"Journée du **{fr_date(_deb_j)}**")
@@ -1185,7 +1199,7 @@ with tab_themes:
                        t.first_seen, t.last_seen, COUNT(at_.article_id) AS n
             FROM topics t LEFT JOIN article_topics at_ ON at_.topic_key = t.topic_key
             LEFT JOIN articles a ON a.id = at_.article_id
-            WHERE t.topic_key != -1 AND COALESCE(t.portee, 'global') = '{_po}'
+            WHERE t.topic_key != -1 {_fpo('t.')}
               AND (at_.article_id IS NULL OR {_aw})
             GROUP BY t.topic_key, t.label, t.top_words, t.active, t.first_seen, t.last_seen
             ORDER BY n DESC""",
@@ -1260,8 +1274,7 @@ with tab_themes:
                         FROM topics t
                         JOIN article_topics at_ ON at_.topic_key = t.topic_key
                         JOIN pesee p ON p.id = at_.article_id
-                        WHERE t.active AND t.topic_key != -1
-                          AND COALESCE(t.portee, 'global') = '{_po}'
+                        WHERE t.active AND t.topic_key != -1 {_fpo('t.')}
                         GROUP BY t.topic_key, t.label, p.decoupe""",
                     _pa).df()
 
@@ -1433,8 +1446,9 @@ with tab_themes:
         # de l'onglet agrège toute la période choisie en un seul classement.
         _jours = [r[0] for r in conn.execute(
             "SELECT DISTINCT run_date FROM article_topics "
-            "WHERE run_date >= ? AND portee = ? ORDER BY 1",
-            [DEBUT_SERIE, _po]).fetchall()]
+            "WHERE run_date >= ?" + (" AND portee = ?" if has_portee else "")
+            + " ORDER BY 1",
+            [DEBUT_SERIE] + ([_po] if has_portee else [])).fetchall()]
         if _jours:
             st.markdown("---")
             st.subheader("Thèmes jour par jour")
@@ -1444,11 +1458,11 @@ with tab_themes:
             )
 
             # --- Carte de chaleur : ce qui monte et ce qui tombe -----------
-            df_hm = conn.execute("""
+            df_hm = conn.execute(f"""
                 WITH j AS (
                     SELECT run_date, topic_key, COUNT(*) AS n
                     FROM article_topics WHERE topic_key <> -1 AND run_date >= ?
-                      AND portee = ?
+                      {_fpo()}
                     GROUP BY 1, 2),
                      tot AS (SELECT run_date, SUM(n) AS t FROM j GROUP BY 1)
                 SELECT j.run_date AS jour, t.label AS theme,
@@ -1456,7 +1470,7 @@ with tab_themes:
                 FROM j
                 JOIN tot ON tot.run_date = j.run_date
                 JOIN topics t ON t.topic_key = j.topic_key
-            """, [DEBUT_SERIE, _po]).df()
+            """, [DEBUT_SERIE]).df()
 
             if not df_hm.empty:
                 # Meme plafond que le selecteur : au-dela d'un mois les
@@ -1499,11 +1513,11 @@ with tab_themes:
                 # clustering quotidien : une base plus ancienne ne l'a pas, et
                 # la requete doit alors se rabattre sur le seul decompte.
                 if has_topic_supports:
-                    return conn.execute("""
+                    return conn.execute(f"""
                         WITH n AS (
                             SELECT topic_key, COUNT(*) AS n FROM article_topics
                             WHERE run_date BETWEEN ? AND ? AND topic_key <> -1
-                              AND portee = ?
+                              {_fpo()}
                             GROUP BY 1),
                              s AS (
                             SELECT topic_key,
@@ -1514,23 +1528,23 @@ with tab_themes:
                         FROM n JOIN topics t ON t.topic_key = n.topic_key
                         LEFT JOIN s ON s.topic_key = n.topic_key
                         ORDER BY n.n DESC
-                    """, [debut, fin, _po, debut, fin]).df()
-                return conn.execute("""
+                    """, [debut, fin, debut, fin]).df()
+                return conn.execute(f"""
                     SELECT t.label AS theme, COUNT(*) AS n, NULL AS supports
                     FROM article_topics at_
                     JOIN topics t ON t.topic_key = at_.topic_key
                     WHERE at_.run_date BETWEEN ? AND ? AND at_.topic_key <> -1
-                      AND at_.portee = ?
+                      {_fpo('at_.')}
                     GROUP BY 1 ORDER BY n DESC
-                """, [debut, fin, _po]).df()
+                """, [debut, fin]).df()
 
             df_p = _themes_periode(_deb, _fin)
             df_prec = _themes_periode(_deb - _pas, _fin - _pas)
 
             _n_cls, _n_tot = conn.execute(
                 "SELECT SUM(CASE WHEN topic_key <> -1 THEN 1 ELSE 0 END), COUNT(*) "
-                "FROM article_topics WHERE run_date BETWEEN ? AND ? AND portee = ?",
-                [_deb, _fin, _po]).fetchone()
+                "FROM article_topics WHERE run_date BETWEEN ? AND ?" + _fpo(),
+                [_deb, _fin]).fetchone()
             _n_cls, _n_tot = int(_n_cls or 0), int(_n_tot or 0)
 
             if df_p.empty:

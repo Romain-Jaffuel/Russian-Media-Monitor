@@ -250,6 +250,18 @@ MAX_JOURS_PERIODE = 30
 UNITE_NATURE = {"press": "Presse", "tv": "Télévision", "youtube": "YouTube",
                 "telegram": "Telegram", "vk": "VK"}
 
+# Une couleur par nature de contenu, valable dans TOUS les graphiques. Elle
+# etait auparavant redefinie sur place, si bien que Telegram changeait de
+# teinte d'un onglet a l'autre. La cle brute et le libelle francais y figurent
+# tous deux : certains graphiques colorent sur source_kind, d'autres sur le
+# libelle affiche.
+NATURE_COLORS = {
+    "press": "#6BCB77", "telegram": "#4C9AFF", "tv": "#C77DFF",
+    "youtube": "#E4572E", "vk": "#FFA94D",
+}
+NATURE_COLORS.update({lib: NATURE_COLORS[k]
+                      for k, lib in UNITE_NATURE.items() if k in NATURE_COLORS})
+
 
 def periode_segmentee(cle, jours, avec_tout=True):
     """Frise de pastilles pour choisir une journée ou une semaine.
@@ -1372,12 +1384,12 @@ with tab_themes:
                 theme_order = theme_order[:shown]
                 df_tk = df_tk[df_tk["label"].isin(theme_order)]
 
-                kind_colors = {"press": "#4C9AFF", "telegram": "#6BCB77",
-                               "youtube": "#E4572E", "tv": "#C77DFF",
-                               "vk": "#FFA94D",
-                               "etat": "#FF6B6B", "para_etat": "#FFA94D",
-                               "independant": "#4C9AFF", "exil": "#6BCB77",
-                               "inconnu": "#6B7280", "Tous": "#4C9AFF"}
+                # Les familles editoriales (etat, exil...) ne sont pas des
+                # natures de contenu : elles gardent leurs propres teintes.
+                kind_colors = dict(NATURE_COLORS)
+                kind_colors.update({"etat": "#FF6B6B", "para_etat": "#FFA94D",
+                                    "independant": "#4C9AFF", "exil": "#6BCB77",
+                                    "inconnu": "#6B7280", "Tous": "#4C9AFF"})
                 fig = px.bar(
                     df_tk, x="val", y="label", color="decoupe", orientation="h",
                     category_orders={"label": theme_order},
@@ -3154,7 +3166,7 @@ with tab_cadrage:
             fig = px.bar(agg, x="pour_100", y="technique", color="nature",
                          orientation="h", barmode="group",
                          category_orders={"technique": ordre},
-                         color_discrete_sequence=TOP_PALETTE,
+                         color_discrete_map=NATURE_COLORS,
                          labels={"pour_100": "Segments concernés (%)",
                                  "technique": "", "nature": ""})
             style(fig, max(420, 26 * len(ordre)))
@@ -3244,8 +3256,9 @@ with tab_contexte:
     })
     fig_age = px.line(df_age, x="Tranche", y=["Télévision", "Internet et réseaux"],
                       markers=True,
-                      color_discrete_map={"Télévision": "#FF6B6B",
-                                          "Internet et réseaux": "#4C9AFF"},
+                      color_discrete_map={
+                          "Télévision": NATURE_COLORS["tv"],
+                          "Internet et réseaux": "#4C9AFF"},
                       labels={"value": "% de la tranche", "variable": "",
                               "Tranche": ""})
     style(fig_age, 320)

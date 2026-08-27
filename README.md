@@ -110,7 +110,7 @@ uv run python scripts/maintenance/export_snapshot.py
 L'instantané retire `raw_html` et les tables inutilisées : **3,5 Go deviennent 59 Mo, puis 13 Mo compressés** — assez léger pour être versionné. `scheduled_update.sh` le produit automatiquement à la fin de chaque passe réussie ; le push, lui, reste manuel.
 
 ```bash
-git add data/snapshot.duckdb.gz && git commit -m "instantane du jour" && git push
+git add data/snapshot.duckdb.gz assets/ && git commit -m "update data" && git push
 ```
 
 L'hébergeur installe depuis `requirements.txt`, qui ne contient que les six paquets du tableau de bord. Il ne faut surtout pas qu'il suive `pyproject.toml` : la chaîne de collecte pèse plus de 7 Go avec torch CUDA, Whisper et Playwright, dont l'affichage n'a aucun besoin.

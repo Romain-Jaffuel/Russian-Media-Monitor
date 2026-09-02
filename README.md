@@ -104,6 +104,7 @@ Arguments : -lc "'/c/Users/<vous>/Classic/Russia-Monitor/scheduled_update.sh'"
 La collecte reste locale — elle a besoin d'une IP résidentielle, que YouTube et VK ne bloquent pas, et du GPU. Seul le tableau de bord est publié, et il lit une copie figée : il n'y a donc jamais deux processus sur la même base.
 
 ```bash
+uv run python scripts/maintenance/capture_dashboard.py
 uv run python scripts/maintenance/export_snapshot.py
 ```
 

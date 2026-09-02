@@ -57,23 +57,34 @@ EXIT_CODE=${PIPESTATUS[0]}
     echo "==== Fin : $(date '+%Y-%m-%d %H:%M:%S') ===="
 } >> "$LOG_FILE"
 
-# Sous-produits d'une passe reussie. Chacun est optionnel : une capture ratee
-# ou un instantane manque ne doit pas faire echouer la collecte, qui elle a
-# abouti. D'ou le || echo plutot qu'un set -e.
+# Sous-produits d'une passe reussie, puis publication. Chaque etape est
+# optionnelle : une capture ratee ou un push refuse ne doit pas faire echouer
+# la collecte, qui elle a abouti. D'ou le || echo plutot qu'un set -e.
 #
-# L'instantane n'est PAS pousse automatiquement -- le depot se fait a la main,
-# quand on a regarde le resultat.
+# Les captures passent AVANT l'export : elles ouvrent la base, et update.py
+# doit avoir rendu la main -- DuckDB n'admet qu'un ecrivain. L'instantane est
+# pris ensuite, sur l'etat que les captures viennent d'illustrer.
 if [ "$EXIT_CODE" -eq 0 ]; then
+    "$PYTHON_EXE" scripts/maintenance/capture_dashboard.py >> "$LOG_FILE" 2>&1 \
+        && echo "Captures   : assets/*.png" \
+        || echo "Captures   : ECHEC (voir $LOG_FILE)"
+
     "$PYTHON_EXE" scripts/maintenance/export_snapshot.py >> "$LOG_FILE" 2>&1 \
         && echo "Instantane : data/snapshot.duckdb.gz" \
         || echo "Instantane : ECHEC (voir $LOG_FILE)"
 
-    # Captures du README. Elles demandent Playwright (extra collecte) et
-    # ouvrent la base : a lancer APRES l'export, une fois update.py termine,
-    # sinon les deux se disputent le verrou DuckDB.
-    "$PYTHON_EXE" scripts/maintenance/capture_dashboard.py >> "$LOG_FILE" 2>&1 \
-        && echo "Captures  : assets/*.png" \
-        || echo "Captures  : ECHEC (voir $LOG_FILE)"
+    # Publication. Le commit ne porte QUE les donnees et les captures : jamais
+    # de code, qui pourrait etre en cours d'edition au moment ou la routine
+    # tourne. git commit sort en erreur quand rien n'est indexe -- c'est le cas
+    # normal d'une journee sans changement, pas un echec.
+    git add data/snapshot.duckdb.gz assets/ >> "$LOG_FILE" 2>&1
+    if git diff --cached --quiet; then
+        echo "Publication: rien de neuf a publier"
+    elif git commit -m "update data" >> "$LOG_FILE" 2>&1 && git push >> "$LOG_FILE" 2>&1; then
+        echo "Publication: pousse sur origin"
+    else
+        echo "Publication: ECHEC (voir $LOG_FILE)"
+    fi
 fi
 
 # Nettoyage des logs de plus de 30 jours

@@ -496,8 +496,26 @@ def _assurer_ligne_non_classe(conn, jour):
             [NOISE_KEY, jour, jour])
 
 
+def _jours_manquants(conn, fin, profondeur):
+    """Journées ayant des articles mais aucun regroupement.
+
+    Une passe interrompue laissait un trou definitif : --backfill 1 ne remonte
+    que d'un jour, et rien ne revenait ensuite sur la journee sautee. Le 25/08
+    a ainsi disparu des thematiques alors que ses 1776 articles etaient bien
+    collectes.
+    """
+    debut = fin - timedelta(days=profondeur - 1)
+    return [r[0] for r in conn.execute("""
+        SELECT DISTINCT CAST(a.published_at AS DATE) AS j
+        FROM articles a
+        WHERE CAST(a.published_at AS DATE) BETWEEN ? AND ?
+          AND NOT EXISTS (SELECT 1 FROM article_topics t
+                          WHERE t.run_date = CAST(a.published_at AS DATE))
+        ORDER BY 1""", [debut, fin]).fetchall()]
+
+
 def run(jour=None, backfill=0, seuil_registre=REGISTRY_THRESHOLD,
-        reset=False):
+        reset=False, combler=7):
     import duckdb
     from sentence_transformers import SentenceTransformer
 
@@ -517,6 +535,13 @@ def run(jour=None, backfill=0, seuil_registre=REGISTRY_THRESHOLD,
     # regrouper est celui qui vient d'etre collecte, pas la veille.
     fin = jour or date.today()
     jours = [fin - timedelta(days=k) for k in range(backfill, -1, -1)]
+    if combler and not reset:
+        oublies = [j for j in _jours_manquants(conn, fin, combler)
+                   if j not in jours]
+        if oublies:
+            log.info("Journées sans regroupement à rattraper : %s",
+                     ", ".join(str(j) for j in oublies))
+            jours = sorted(set(jours) | set(oublies))
 
     log.info("Chargement du modèle d'embedding (%s)...", EMBED_MODEL)
     embed = SentenceTransformer(EMBED_MODEL)
@@ -587,10 +612,13 @@ if __name__ == "__main__":
                         "au plus récent")
     p.add_argument("--threshold", type=float, default=REGISTRY_THRESHOLD,
                    help="similarité minimale pour retrouver un thème connu")
+    p.add_argument("--combler", type=int, default=7,
+                   help="rattrape les journées des N derniers jours qui ont "
+                        "des articles mais aucun regroupement ; 0 désactive")
     p.add_argument("--reset", action="store_true",
                    help="vide topics/article_topics/topic_supports")
     a = p.parse_args()
     sys.exit(run(
         jour=datetime.strptime(a.date, "%Y-%m-%d").date() if a.date else None,
-        backfill=a.backfill, seuil_registre=a.threshold,
+        backfill=a.backfill, seuil_registre=a.threshold, combler=a.combler,
         reset=a.reset))

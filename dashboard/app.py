@@ -291,7 +291,7 @@ def periode_segmentee(cle, jours, avec_tout=True):
     if not options:
         return grain, None, None
 
-    defaut = TOUT if avec_tout else options[-1]
+    defaut = options[-1]
     with c_periode:
         choix = st.segmented_control(
             "Période", ([TOUT] if avec_tout else []) + options, default=defaut,
@@ -728,7 +728,12 @@ has_portee = bool(conn.execute(
 has_geo = "entity_geo" in tables
 
 
-date_start = st.session_state.get("global_date_start", date(2026, 5, 1))
+# Le corpus est filtre a la COLLECTE, pas a la publication : une video mise
+# en ligne en juillet et transcrite cette semaine y a sa place. MIN(published_at)
+# remonte donc a 2019 pour quelques archives, ce qui n'est pas une periode
+# d'observation. Le defaut part de DEBUT_SERIE, date a laquelle la collecte a
+# atteint son regime, et l'on peut toujours remonter a la main.
+date_start = st.session_state.get("global_date_start", DEBUT_SERIE)
 date_end = st.session_state.get("global_date_end", date.today())
 
 with st.sidebar:
@@ -1102,22 +1107,29 @@ with tab_vue:
             )
 
     df_vol = conn.execute(
-        f"SELECT DATE_TRUNC('{GRAIN}', published_at) AS jour, source_name, COUNT(*) AS n "
+        f"SELECT DATE_TRUNC('{GRAIN}', published_at) AS jour, source_kind, COUNT(*) AS n "
         f"FROM articles WHERE {WHERE} AND published_at IS NOT NULL "
         f"GROUP BY 1, 2 ORDER BY 1", params).df()
     df_vol = df_vol[pd.to_datetime(df_vol["jour"]).dt.date >= DEBUT_SERIE]
     if not df_vol.empty:
         st.subheader(f"Volume par {GRAIN_LABEL.lower()}")
-        df_d, cmap, order = top5_plus_autres(df_vol, "source_name", "n")
-        df_agg = df_d.groupby(["jour", "display"], as_index=False)["n"].sum()
-        fig = px.bar(df_agg, x="jour", y="n", color="display",
-                     category_orders={"display": order}, color_discrete_map=cmap,
-                     labels={"jour": "Date", "n": "Segments", "display": ""})
+        # Empile par nature de contenu et non par media : cinq natures se
+        # lisent, quarante sources non -- et la couleur devient alors la meme
+        # que partout ailleurs.
+        df_vol["nature"] = df_vol["source_kind"].map(
+            lambda k: UNITE_NATURE.get(k, k))
+        df_agg = df_vol.groupby(["jour", "nature"], as_index=False)["n"].sum()
+        _ordre_nat = [UNITE_NATURE[k] for k in UNITE_NATURE
+                      if UNITE_NATURE[k] in set(df_agg["nature"])]
+        fig = px.bar(df_agg, x="jour", y="n", color="nature",
+                     category_orders={"nature": _ordre_nat},
+                     color_discrete_map=NATURE_COLORS,
+                     labels={"jour": "Date", "n": "Segments", "nature": ""})
         fig.update_layout(barmode="stack", legend_title_text="")
         style(fig, 450)
         st.plotly_chart(fig, width="stretch", key=_next_chart_key())
         st.caption(
-            "Nombre de segments publiés chaque jour, empilés par source. "
+            "Nombre de segments publiés chaque jour, empilés par nature de contenu. "
             "Un segment est l'unité stockée et analysée : un article de "
             "presse en vaut un, une vidéo de télévision une trentaine. "
             "Exemple : une barre où la télévision apporte 450 segments "
@@ -2567,7 +2579,7 @@ with tab_diagnostic:
     st.subheader(f"Évolution du taux de traitement, par {GRAIN_LABEL.lower()}")
     st.caption(
         "Selectionnez une source pour voir si elle a commencé à buguer à une date précise. "
-        "Démarrage des courbes au 1er avril 2026."
+        f"Démarrage des courbes au {DEBUT_SERIE:%d/%m/%Y}."
     )
     sources_all_evo = ["(toutes sources)"] + sorted(
         conn.execute(
@@ -2585,17 +2597,17 @@ with tab_diagnostic:
     # l'analyse correspondante n'a pas encore tourne, plutôt que de planter.
     _empty_cte_w = (
         f"SELECT DATE_TRUNC('{GRAIN}', a.published_at) AS week, 0 AS n "
-        f"FROM articles a WHERE a.published_at >= '2026-04-01' {src_clause} AND FALSE GROUP BY 1"
+        f"FROM articles a WHERE a.published_at >= '2026-08-11' {src_clause} AND FALSE GROUP BY 1"
     )
     snt_w_sql = (
         f"SELECT DATE_TRUNC('{GRAIN}', a.published_at) AS week, COUNT(DISTINCT s.article_id) AS n "
         f"FROM articles a JOIN article_target_sentiment s ON s.article_id = a.id "
-        f"WHERE a.published_at >= '2026-04-01' {src_clause} GROUP BY 1"
+        f"WHERE a.published_at >= '2026-08-11' {src_clause} GROUP BY 1"
     ) if has_target_sent else _empty_cte_w
     thm_w_sql = (
         f"SELECT DATE_TRUNC('{GRAIN}', a.published_at) AS week, COUNT(DISTINCT t.article_id) AS n "
         f"FROM articles a JOIN article_topics t ON t.article_id = a.id "
-        f"WHERE a.published_at >= '2026-04-01' {src_clause} GROUP BY 1"
+        f"WHERE a.published_at >= '2026-08-11' {src_clause} GROUP BY 1"
     ) if has_topics else _empty_cte_w
 
     # Filtre date >= 2026-04-01 dans toutes les CTEs
@@ -2609,7 +2621,7 @@ with tab_diagnostic:
                             (CASE WHEN a.source_kind = 'telegram' THEN 50 ELSE 300 END)
                             THEN 1 ELSE 0 END) AS with_content
             FROM articles a
-            WHERE a.published_at >= '2026-04-01' {src_clause}
+            WHERE a.published_at >= '2026-08-11' {src_clause}
             GROUP BY 1
         ),
         snt_w AS ({snt_w_sql}),
@@ -2706,7 +2718,7 @@ with tab_diagnostic:
 
     c3, c4, c5 = st.columns(3)
     with c3:
-        date_start = st.date_input("Du", value=date(2026, 5, 1), key="src_date_start")
+        date_start = st.date_input("Du", value=DEBUT_SERIE, key="src_date_start")
     with c4:
         date_end = st.date_input("Au", value=date.today(), key="src_date_end")
     with c5:
@@ -2790,7 +2802,7 @@ with tab_signaux:
 
     window_days = st.select_slider(
         "Fenêtre de comparaison (jours)", options=[7, 14, 30, 45, 60, 90],
-        value=30, key="sig_window",
+        value=7, key="sig_window",
         help="Sur une fenêtre courte, un jour de collecte manquant suffit a "
              "faire apparaître de faux signaux. 30 jours ou plus lisse ces "
              "a-coups.",

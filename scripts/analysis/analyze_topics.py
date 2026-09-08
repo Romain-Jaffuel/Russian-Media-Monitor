@@ -165,30 +165,51 @@ def _lemmatizing_tokenizer(text):
 # label affiche en priorite devient une phrase courte lisible.
 _LABEL_SYSTEM_PROMPT = """Vous nommez, en francais, un groupe d'articles de presse russophone portant sur la Russie.
 
-Le label doit dire DE QUOI parle concretement le groupe, assez precisement
-pour qu'un lecteur qui ne verrait que lui sache de quel evenement ou de quel
-dossier il s'agit.
+Ce groupe a ete constitue automatiquement : ses articles partagent un
+vocabulaire recurrent, qui vous est donne. Votre travail est de dire a quoi ce
+vocabulaire renvoie concretement, en vous appuyant sur les titres et les
+extraits pour comprendre de quel evenement il s'agit.
 
-Regles imperatives :
-- 3 a 7 mots MAXIMUM. Un label plus long est refuse.
-- Format Titre, sans point final
-- ecrire UNIQUEMENT en alphabet latin, aucun caractere cyrillique
-- TRADUIRE les mots communs (хищение топлива -> detournement de carburant,
-  мост -> pont, выборы -> elections) et ne transcrire que les noms propres
-  (Туманная -> Toumannaia, Новиченко -> Novitchenko)
-- nommer les acteurs, lieux et dossiers reels qui reviennent dans le groupe
-  (« Frappes de drones sur Rostov » plutot que « Attaques »)
-- separer les mots par des espaces. Les traits d'union sont reserves aux
-  noms propres composes (Saxe-Anhalt, Anak-Krakatau) : ne JAMAIS coller une
-  phrase entiere avec des tirets
-- n'inventer aucun sigle. Ecrire le nom du parti ou de l'organisation tel
-  qu'il apparait dans les documents (AfD, CDU), ou l'omettre
-- n'inventer aucune date, aucun chiffre, aucun fait absent des documents
-- categories vagues interdites : « Actualites », « Politique », « Divers »,
-  « Societe », « International »
-- si le groupe melange plusieurs sujets, nommer celui qui domine
+Procedez en deux temps.
 
-Repondez en JSON : {"label": "..."}"""
+1. « sujet » : en une phrase francaise complete, dites ce qui se passe dans ces
+   documents, qui fait quoi et ou, et ce qui en fait un seul dossier. Cette
+   phrase sert a verifier que vous avez compris ; elle ne sera pas affichee.
+
+2. « label » : a partir de cette phrase, ecrivez le nom du groupe. Il doit se
+   lire comme un intitule qu'un lecteur francais comprend seul, sans avoir vu
+   les articles.
+
+Exemples de bons labels :
+   « Drones ukrainiens sur le port d'Oust-Louga »
+   « Poutine autorise des reservistes inaptes contre les drones »
+   « Detournement de carburant au ministere de l'Interieur »
+   « Reinhumation du nationaliste ukrainien Konovalets »
+
+Exemples de mauvais labels, a ne jamais produire :
+   « Attaques drones VSU port Ust-Luga Leningradskaya Oblast »  termes empiles
+   « Initiatives Poutine drones categorie D »                   incomprehensible
+   « Debats elections 2024 Russie Unie ridicule »               jugement porte
+   « Actualites internationales »                               vide
+
+Regles :
+- une formule nominale francaise de 4 a 8 mots, avec ses articles et ses
+  prepositions (de, sur, a, contre) pour qu'elle se lise comme du francais
+- francais correct et accentue, jamais de caractere cyrillique. TRADUIRE les
+  mots communs (хищение топлива -> detournement de carburant, мост -> pont) et
+  ne transcrire que les noms propres (Туманная -> Toumannaia)
+- aucun terme empile sans lien grammatical, aucun tiret pour coller des mots.
+  Les traits d'union sont reserves aux noms propres composes (Saxe-Anhalt)
+- n'inventer aucune date, aucun chiffre, aucun sigle, aucun fait absent des
+  documents. Dans le doute, omettre l'element plutot que de le deviner
+- aucun jugement de valeur : nommer le sujet, pas ce qu'on en pense
+- le groupe a TOUJOURS un fil directeur. Certains extraits peuvent parler
+  d'autre chose : revues de presse et resumes quotidiens melangent des sujets
+  sans rapport. Les ignorer et nommer le fil que designent les mots-cles
+- ne JAMAIS repondre que le groupe est divers, varie, general, heterogene ou
+  sans lien commun, ni le nommer « Actualites ». Ce sont des non-reponses
+
+Repondez en JSON : {"sujet": "...", "label": "..."}"""
 
 
 # Extraits de contenu joints aux titres. Les titres de Telegram et des
@@ -245,36 +266,159 @@ def _degrouper(mot):
     return mot
 
 
-_LABEL_N_EXTRAITS = 6
-_LABEL_LONGUEUR_EXTRAIT = 400
+# Lettres accentuees admises en francais. Le modele produit parfois une marque
+# combinante aberrante (« Gala̧tasaray », cedille posee sur un a) : elle passe
+# les controles puisqu'elle est en alphabet latin, mais s'affiche comme une
+# coquille dans le tableau de bord.
+_ACCENTS_FR = set("àâäéèêëîïôöùûüÿçÀÂÄÉÈÊËÎÏÔÖÙÛÜŸÇ")
+
+
+def _nettoyer_diacritiques(texte):
+    """Retire les marques combinantes qui ne forment pas une lettre francaise."""
+    import unicodedata
+    decompose = unicodedata.normalize("NFD", texte)
+    sortie, base = [], ""
+    for c in decompose:
+        if unicodedata.combining(c):
+            if base and unicodedata.normalize("NFC", base + c) in _ACCENTS_FR:
+                sortie.append(c)
+            continue
+        base = c
+        sortie.append(c)
+    return unicodedata.normalize("NFC", "".join(sortie))
+
+
+# Longueur visee. Au-dela, on redemande une formule plus courte.
+_LABEL_MAX_MOTS = 9
+
+
+def _sans_markdown(texte):
+    """Retire les marques Markdown, ou qu'elles soient dans la chaine.
+
+    Le modele met en valeur les titres d'oeuvres et les noms de navires
+    (« le *Professeur Molchanov* »). Un strip des extremites laissait passer
+    ces marques au milieu du libelle.
+    """
+    for marque in ("**", "*", "__", "`"):
+        texte = texte.replace(marque, "")
+    return " ".join(texte.split()).strip("_ ").strip()
+
+
+def _resserrer(message, label):
+    """Redemande une formule plus courte, sans changer de sujet."""
+    from src.llm_mistral import complete_json, MODEL_LARGE
+    consigne = (
+        message + "\n\nVotre proposition « " + label + " » fait plus de "
+        + str(_LABEL_MAX_MOTS) + " mots. Reecrivez-la en " + str(_LABEL_MAX_MOTS)
+        + " mots au maximum, en gardant l'element le plus distinctif (le nom "
+        "propre, le lieu ou l'affaire) et en supprimant les enumerations et "
+        "les qualificatifs. Elle doit rester une formule francaise lisible.")
+    court = _extraire_label(complete_json(_LABEL_SYSTEM_PROMPT, consigne,
+                                          model=MODEL_LARGE, max_tokens=300))
+    if not court or _CYRILLIQUE.search(court):
+        return ""
+    court = " ".join(_degrouper(m) for m in court.split())
+    # On ne garde le resserrage que s'il raccourcit vraiment.
+    return court if len(court.split()) < len(label.split()) else ""
+
+
+def _extraire_label(data):
+    """Sort le libelle de la reponse, quelle que soit sa forme.
+
+    Le modele respecte le schema demande la plupart du temps, mais rend
+    parfois {"label": {"label": "..."}} ou une liste. Laisser passer ces cas
+    faisait tomber toute la passe sur un .strip() applique a un dict.
+    """
+    vu = 0
+    while isinstance(data, (dict, list)) and vu < 4:
+        if isinstance(data, list):
+            data = data[0] if data else ""
+        else:
+            data = data.get("label", data.get("sujet", ""))
+        vu += 1
+    return data.strip().strip(".") if isinstance(data, str) else ""
+
+
+def _repartir(elements, n):
+    """Prend n elements etales sur toute la liste, pas les n premiers.
+
+    Les membres d'un theme arrivent ordonnes par probabilite d'appartenance,
+    et les premiers se ressemblent souvent enormement : une seule emission
+    decoupee en soixante segments occupe tout le haut du classement. Prendre
+    les n premiers donne alors un echantillon qui ne represente qu'un coin du
+    theme, et un libelle qui ne vaut que pour ce coin.
+    """
+    elements = [e for e in elements if e]
+    if len(elements) <= n:
+        return elements
+    pas = len(elements) / n
+    return [elements[int(i * pas)] for i in range(n)]
+
+
+# Mots-outils sur lesquels un libelle tronque ne doit pas s'arreter.
+_MOTS_OUTILS = {"de", "du", "des", "la", "le", "les", "et", "a", "au", "aux",
+                "en", "sur", "pour", "dans", "par", "avec", "contre", "un",
+                "une", "d", "l"}
+
+# Volume envoye au modele pour nommer. Large a dessein : sur un theme de
+# plusieurs centaines d'articles, une poignee de titres ne prouve rien et le
+# nom sort faux. A ~4 500 jetons par appel on reste tres loin du debit
+# autorise sur le 14b (937 500 jetons/minute).
+_LABEL_N_TITRES = 120
+_LABEL_N_EXTRAITS = 25
+_LABEL_LONGUEUR_EXTRAIT = 500
 
 
 def _generate_readable_label(keywords_str, example_titles, fallback,
-                             extraits=None):
+                             extraits=None, n_articles=None):
     """Nomme un groupe d'articles. Renvoie `fallback` si l'appel echoue.
 
-    Le 8b et non le 14b : compares sur les memes themes, le 14b translitterait
-    au lieu de traduire (« Hischage-toplivo-MVD-Evrotrans » la ou le 8b rendait
-    « Affaire corruption carburant MVD »). Un appel par theme NOUVEAU, pas par
-    article -- une vingtaine par jour.
-    """
-    from src.llm_mistral import complete_json, MODEL_SMALL
+    Le 14b, mesure contre le 8b sur douze themes le 09/09/2026. Un precedent
+    essai donnait le 8b gagnant, mais il portait sur l'ancienne consigne, qui
+    demandait « 3 a 7 mots, Format Titre » a partir des mots-cles : les deux
+    modeles empilaient alors des termes et le 14b y ajoutait de la
+    translitteration. Avec la consigne en deux temps, le 14b rend la formule
+    la plus lisible (« Transfert de Batrakov du Lokomotiv au Galatasaray » la
+    ou le 8b rend « Transfert d'Alekseï Batrakov vers Galatasaray », et surtout
+    « Poutine autorise des reservistes inaptes a defendre contre les drones »
+    la ou le 8b melange deux sujets). Son debit, 30 requetes/minute, suffit
+    largement : un appel par theme NOUVEAU, pas par article.
 
-    bloc_titres = "\n".join(f"- {t}" for t in example_titles if t) \
-        or "(aucun titre exploitable)"
-    prompt = (f"Mots-cles du groupe : {keywords_str}\n\n"
-              f"Titres d'articles du groupe :\n{bloc_titres}")
-    if extraits:
-        bloc = "\n\n".join(
-            (e or "")[:_LABEL_LONGUEUR_EXTRAIT]
-            for e in extraits[:_LABEL_N_EXTRAITS] if e)
-        if bloc:
-            prompt += f"\n\nDebuts d'articles du groupe :\n{bloc}"
-    data = complete_json(_LABEL_SYSTEM_PROMPT, prompt,
-                         model=MODEL_SMALL, max_tokens=60)
+    L'ordre du message compte autant que la consigne. Les mots-cles viennent en
+    tete parce qu'ils sont la signature statistique du groupe ; en les
+    releguant a la fin, le modele se laissait entrainer par des extraits de
+    revues de presse et repondait « divers sujets russes ».
+    """
+    from src.llm_mistral import complete_json, MODEL_LARGE
+
+    titres = _repartir(list(example_titles or []), _LABEL_N_TITRES)
+    morceaux = _repartir(list(extraits or []), _LABEL_N_EXTRAITS)
+
+    parties = [f"Vocabulaire recurrent qui a constitue le groupe : {keywords_str}"]
+    if n_articles:
+        # Dire la taille du groupe et celle de l'echantillon : sans cela le
+        # modele nomme ce qu'il voit comme s'il voyait tout, et un detail
+        # present dans deux articles sur mille se retrouve dans le titre.
+        parties.append(
+            f"Le groupe compte {n_articles} articles. Les {len(titres)} titres "
+            f"ci-dessous en sont un echantillon reparti sur l'ensemble du "
+            f"groupe : ne retenez que ce qui y revient souvent.")
+    if titres:
+        bloc_titres = "\n".join(f"- {t}" for t in titres)
+        parties.append(f"Titres des articles du groupe :\n{bloc_titres}")
+    if morceaux:
+        bloc = "\n\n".join((e or "")[:_LABEL_LONGUEUR_EXTRAIT] for e in morceaux)
+        if bloc.strip():
+            parties.append("Extraits, pour comprendre a quoi ce vocabulaire "
+                           f"renvoie :\n{bloc}")
+    # De la place pour le champ « sujet », qui n'est pas affiche mais que le
+    # modele doit ecrire avant de nommer : c'est lui qui force la comprehension.
+    message = "\n\n".join(parties)
+    data = complete_json(_LABEL_SYSTEM_PROMPT, message,
+                         model=MODEL_LARGE, max_tokens=300)
     if not data:
         return fallback
-    label = (data.get("label") or "").strip().strip(".")
+    label = _extraire_label(data)
     if not label:
         return fallback
     # Un libelle qui garde du cyrillique n'a pas rempli sa fonction : le
@@ -282,12 +426,12 @@ def _generate_readable_label(keywords_str, example_titles, fallback,
     # le signalant au modele -- au-dela, on garde ce qu'il a rendu.
     if _CYRILLIQUE.search(label):
         rappel = (
-            prompt + "\n\nVotre proposition « " + label + " » contient "
+            message + "\n\nVotre proposition « " + label + " » contient "
             "des caracteres cyrilliques. Reecrivez-la entierement en "
             "alphabet latin.")
         data = complete_json(_LABEL_SYSTEM_PROMPT, rappel,
-                             model=MODEL_SMALL, max_tokens=60)
-        relance = ((data or {}).get("label") or "").strip().strip(".")
+                             model=MODEL_LARGE, max_tokens=300)
+        relance = _extraire_label(data)
         if relance and not _CYRILLIQUE.search(relance):
             label = relance
         else:
@@ -299,15 +443,23 @@ def _generate_readable_label(keywords_str, example_titles, fallback,
     # capitalises (Saxe-Anhalt, Kim-Chen-Yn), la phrase collee en fait plus,
     # ou melange des minuscules.
     label = " ".join(_degrouper(m) for m in label.split())
-    # Le petit modele ne respecte pas toujours la consigne : on coupe au-dela
-    # de dix mots plutot que d'afficher une phrase entiere en guise de titre.
+    # La consigne demande 4 a 8 mots ; sur un theme touffu le modele deborde
+    # quand meme (9,2 mots de moyenne mesures sur 439 themes). On lui redemande
+    # une formule courte plutot que de couper : tronquer ampute la fin, qui
+    # porte souvent le nom propre distinctif.
+    if len(label.split()) > _LABEL_MAX_MOTS:
+        court = _resserrer(message, label)
+        if court:
+            label = court
+    label = _nettoyer_diacritiques(_sans_markdown(label))
+    # Dernier filet, si le resserrage a echoue : on coupe, en retirant les
+    # mots-outils que la coupe laisse en fin de formule.
     mots = label.split()
-    if len(mots) > 10:
-        label = " ".join(mots[:10])
-    # Le modele encadre parfois sa reponse d'asterisques Markdown ; affichees
-    # telles quelles dans un tableau, elles ressemblent a une coquille. En
-    # sortie, donc apres la reprise sur cyrillique qui reecrit `label`.
-    label = label.strip("*_` ").strip()
+    if len(mots) > 12:
+        mots = mots[:12]
+        while mots and mots[-1].lower() in _MOTS_OUTILS:
+            mots.pop()
+        label = " ".join(mots)
     return label[:150] if label else fallback
 
 
@@ -557,8 +709,10 @@ def run(window_days: int = 30, min_topic_size: int = 15, threshold: float = 0.62
     log.info("Generation des labels lisibles (%d clusters, 1 appel Mistral/cluster)...",
               len(bt_id_by_index))
     for i, bt_id in enumerate(bt_id_by_index):
+        exemples = titles_by_bt.get(bt_id, [])
         new_labels[i] = _generate_readable_label(
-            new_top_words[i], titles_by_bt.get(bt_id, []), fallback=new_labels[i])
+            new_top_words[i], exemples, fallback=new_labels[i],
+            n_articles=len(exemples))
         if (i + 1) % 10 == 0:
             log.info("  %d/%d labels generes", i + 1, len(bt_id_by_index))
 

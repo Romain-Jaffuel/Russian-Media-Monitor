@@ -335,8 +335,11 @@ def _enregistrer(conn, jour, portee, sujets, rows, embeddings, seuil_registre,
     cles, n_repris, n_neufs = [], 0, 0
     for idx, s in enumerate(sujets):
         mots = ", ".join(dict.fromkeys(s["mots"].replace(" | ", ", ").split(", ")))[:400]
-        exemples = [titres[i] for i in s["membres"][:10]]
-        morceaux = [contenus[i] for i in s["membres"][:6]]
+        # Toute la liste des membres : _generate_readable_label y prend un
+        # echantillon reparti. Tronquer ici lui donnerait le haut du groupe,
+        # souvent une meme emission decoupee en segments.
+        exemples = [titres[i] for i in s["membres"]]
+        morceaux = [contenus[i] for i in s["membres"]]
         if idx in appariement:
             cle, _sim = appariement[idx]
             anciens = conn.execute(
@@ -346,7 +349,7 @@ def _enregistrer(conn, jour, portee, sujets, rows, embeddings, seuil_registre,
             if _recouvrement(anciens, mots) < RECOUVREMENT_MIN:
                 libelle = _generate_readable_label(
                     mots, exemples, fallback=" / ".join(mots.split(", ")[:3]),
-                    extraits=morceaux)
+                    extraits=morceaux, n_articles=len(s["membres"]))
             conn.execute(
                 "UPDATE topics SET top_words = ?, centroid = ?, last_seen = ?, "
                 "active = TRUE, label = COALESCE(?, label) WHERE topic_key = ?",
@@ -355,7 +358,7 @@ def _enregistrer(conn, jour, portee, sujets, rows, embeddings, seuil_registre,
         else:
             libelle = _generate_readable_label(
                 mots, exemples, fallback=" / ".join(mots.split(", ")[:3]),
-                extraits=morceaux)
+                extraits=morceaux, n_articles=len(s["membres"]))
             cle = conn.execute("SELECT nextval('topic_key_seq')").fetchone()[0]
             conn.execute(
                 "INSERT INTO topics (topic_key, label, top_words, centroid, "

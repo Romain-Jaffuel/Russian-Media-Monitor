@@ -163,28 +163,151 @@ def _lemmatizing_tokenizer(text):
 # article : ~50-60 appels/run plutot que ~1000, cout negligeable). Les mots
 # c-TF-IDF ("всу / нпз / бпла") restent dans top_words pour le detail ; le
 # label affiche en priorite devient une phrase courte lisible.
-_LABEL_SYSTEM_PROMPT = """Vous nommez des clusters d'articles de presse russophone (Russie) par un label court en francais, comme un titre de rubrique.
+_LABEL_SYSTEM_PROMPT = """Vous nommez, en francais, un groupe d'articles de presse russophone portant sur la Russie.
 
-Regles :
-- 2 a 5 mots, Format Titre
-- decrit le sujet concret du cluster (pas une categorie generique comme "Actualites")
-- basé sur les mots-cles ET les exemples de titres fournis
+Le label doit dire DE QUOI parle concretement le groupe, assez precisement
+pour qu'un lecteur qui ne verrait que lui sache de quel evenement ou de quel
+dossier il s'agit.
+
+Regles imperatives :
+- 3 a 7 mots MAXIMUM. Un label plus long est refuse.
+- Format Titre, sans point final
+- ecrire UNIQUEMENT en alphabet latin, aucun caractere cyrillique
+- TRADUIRE les mots communs (хищение топлива -> detournement de carburant,
+  мост -> pont, выборы -> elections) et ne transcrire que les noms propres
+  (Туманная -> Toumannaia, Новиченко -> Novitchenko)
+- nommer les acteurs, lieux et dossiers reels qui reviennent dans le groupe
+  (« Frappes de drones sur Rostov » plutot que « Attaques »)
+- separer les mots par des espaces. Les traits d'union sont reserves aux
+  noms propres composes (Saxe-Anhalt, Anak-Krakatau) : ne JAMAIS coller une
+  phrase entiere avec des tirets
+- n'inventer aucun sigle. Ecrire le nom du parti ou de l'organisation tel
+  qu'il apparait dans les documents (AfD, CDU), ou l'omettre
+- n'inventer aucune date, aucun chiffre, aucun fait absent des documents
+- categories vagues interdites : « Actualites », « Politique », « Divers »,
+  « Societe », « International »
+- si le groupe melange plusieurs sujets, nommer celui qui domine
 
 Repondez en JSON : {"label": "..."}"""
 
 
-def _generate_readable_label(keywords_str, example_titles, fallback):
+# Extraits de contenu joints aux titres. Les titres de Telegram et des
+# transcriptions sont souvent absents ou inutilisables (« Обзорная сводка ») ;
+# quelques lignes du texte disent alors ce dont le groupe parle vraiment.
+_CYRILLIQUE = re.compile(r"[Ѐ-ӿ]")
+
+# Transcription mecanique du cyrillique, en dernier recours. Le modele rend
+# souvent un bon libelle francais dont un seul nom propre reste en russe
+# (« Vostok Oyl » ecrit Восток Ойл). Rejeter tout le libelle pour cela
+# renvoyait au repli, c'est-a-dire aux mots-cles russes -- pire que le defaut
+# qu'on voulait corriger. On transcrit donc le fragment fautif.
+_TRANSLIT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "io",
+    "ж": "j", "з": "z", "и": "i", "й": "i", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "ou",
+    "ф": "f", "х": "kh", "ц": "ts", "ч": "tch", "ш": "ch", "щ": "chtch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "iou", "я": "ia",
+}
+
+
+def _transcrire(texte):
+    """Passe le cyrillique restant en alphabet latin, lettre a lettre."""
+    sortie = []
+    for c in texte:
+        bas = c.lower()
+        if bas in _TRANSLIT:
+            lat = _TRANSLIT[bas]
+            sortie.append(lat.capitalize() if c.isupper() and lat else lat)
+        else:
+            sortie.append(c)
+    return "".join(sortie)
+# Prefixes qui forment un mot compose francais et non une phrase collee :
+# « pro-ukrainien » et « anti-missile » doivent garder leur tiret, sans quoi
+# on reecrit des libelles corrects.
+_PREFIXES = {
+    "anti", "auto", "co", "contre", "ex", "extra", "inter", "mi", "multi",
+    "neo", "néo", "non", "post", "pre", "pré", "pro", "semi", "sous",
+    "sur", "ultra", "vice",
+    # Composes de nationalite, meme role : « russo-chinois », « franco-russe »
+    "afro", "euro", "franco", "germano", "greco", "indo", "russo", "sino",
+}
+
+
+def _degrouper(mot):
+    """Rend les espaces a une chaine de mots collee par des tirets."""
+    bouts = mot.split("-")
+    if len(bouts) < 2:
+        return mot
+    if len(bouts) == 2 and bouts[0].lower() in _PREFIXES:
+        return mot
+    if len(bouts) > 3 or any(b[:1].islower() for b in bouts[1:] if b):
+        return " ".join(b for b in bouts if b)
+    return mot
+
+
+_LABEL_N_EXTRAITS = 6
+_LABEL_LONGUEUR_EXTRAIT = 400
+
+
+def _generate_readable_label(keywords_str, example_titles, fallback,
+                             extraits=None):
+    """Nomme un groupe d'articles. Renvoie `fallback` si l'appel echoue.
+
+    Le 8b et non le 14b : compares sur les memes themes, le 14b translitterait
+    au lieu de traduire (« Hischage-toplivo-MVD-Evrotrans » la ou le 8b rendait
+    « Affaire corruption carburant MVD »). Un appel par theme NOUVEAU, pas par
+    article -- une vingtaine par jour.
+    """
     from src.llm_mistral import complete_json, MODEL_SMALL
 
-    titles_block = "\n".join(f"- {t}" for t in example_titles if t) or "(aucun titre disponible)"
-    data = complete_json(
-        _LABEL_SYSTEM_PROMPT,
-        f"Mots-cles : {keywords_str}\n\nExemples de titres d'articles du cluster :\n{titles_block}",
-        model=MODEL_SMALL, max_tokens=40,
-    )
+    bloc_titres = "\n".join(f"- {t}" for t in example_titles if t) \
+        or "(aucun titre exploitable)"
+    prompt = (f"Mots-cles du groupe : {keywords_str}\n\n"
+              f"Titres d'articles du groupe :\n{bloc_titres}")
+    if extraits:
+        bloc = "\n\n".join(
+            (e or "")[:_LABEL_LONGUEUR_EXTRAIT]
+            for e in extraits[:_LABEL_N_EXTRAITS] if e)
+        if bloc:
+            prompt += f"\n\nDebuts d'articles du groupe :\n{bloc}"
+    data = complete_json(_LABEL_SYSTEM_PROMPT, prompt,
+                         model=MODEL_SMALL, max_tokens=60)
     if not data:
         return fallback
     label = (data.get("label") or "").strip().strip(".")
+    if not label:
+        return fallback
+    # Un libelle qui garde du cyrillique n'a pas rempli sa fonction : le
+    # lecteur du tableau de bord ne lit pas le russe. Une seule reprise, en
+    # le signalant au modele -- au-dela, on garde ce qu'il a rendu.
+    if _CYRILLIQUE.search(label):
+        rappel = (
+            prompt + "\n\nVotre proposition « " + label + " » contient "
+            "des caracteres cyrilliques. Reecrivez-la entierement en "
+            "alphabet latin.")
+        data = complete_json(_LABEL_SYSTEM_PROMPT, rappel,
+                             model=MODEL_SMALL, max_tokens=60)
+        relance = ((data or {}).get("label") or "").strip().strip(".")
+        if relance and not _CYRILLIQUE.search(relance):
+            label = relance
+        else:
+            label = _transcrire(relance or label)
+    # Le modele contourne parfois la limite de mots en collant sa phrase avec
+    # des tirets (« Visite-Kiev-Kushner-cessation-bombardements »), qui compte
+    # alors pour un seul mot. On degroupe avant de compter, sans casser les
+    # noms propres composes : un vrai compose fait deux ou trois segments tous
+    # capitalises (Saxe-Anhalt, Kim-Chen-Yn), la phrase collee en fait plus,
+    # ou melange des minuscules.
+    label = " ".join(_degrouper(m) for m in label.split())
+    # Le petit modele ne respecte pas toujours la consigne : on coupe au-dela
+    # de dix mots plutot que d'afficher une phrase entiere en guise de titre.
+    mots = label.split()
+    if len(mots) > 10:
+        label = " ".join(mots[:10])
+    # Le modele encadre parfois sa reponse d'asterisques Markdown ; affichees
+    # telles quelles dans un tableau, elles ressemblent a une coquille. En
+    # sortie, donc apres la reprise sur cyrillique qui reecrit `label`.
+    label = label.strip("*_` ").strip()
     return label[:150] if label else fallback
 
 

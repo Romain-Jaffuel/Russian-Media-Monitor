@@ -1518,7 +1518,14 @@ with tab_themes:
                 fig.update_traces(
                     hovertemplate="%{y}<br>%{x} : %{z:.1f} %% des documents "
                                   "classés<extra></extra>")
-                fig.update_xaxes(side="top", tickangle=0)
+                # Une etiquette tous les N jours selon le nombre de
+                # colonnes : a 23 journees, les 23 dates se touchaient et se
+                # lisaient « 11/0812/0813/08 ». Environ 14 reperes tiennent
+                # dans la largeur, le pas suit donc l'accumulation des jours.
+                _pas = max(1, -(-len(_piv.columns) // 14))
+                _reperes = list(_piv.columns)[::_pas]
+                fig.update_xaxes(side="top", tickangle=0, tickmode="array",
+                                 tickvals=_reperes, ticktext=_reperes)
                 style(fig, 34 * len(_piv) + 110)
                 st.plotly_chart(fig, width="stretch", key=_next_chart_key())
                 st.caption(

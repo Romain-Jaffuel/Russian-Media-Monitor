@@ -29,8 +29,24 @@ load_dotenv()  # lit .env si present (MISTRAL_API_KEY), sans ecraser l'env exist
 
 log = logging.getLogger("llm")
 
-MODEL_SMALL = "mistral-small-latest"
-MODEL_LARGE = "mistral-large-latest"
+# Modeles reellement accessibles a ce compte, mesure le 08/09/2026 en
+# interrogeant l'API directement :
+#
+#   mistral-small / medium   429, x-ratelimit-limit-req-minute = 0
+#   mistral-large            403 tier_not_allowed
+#   ministral-8b-2512        200, 188 requetes/minute
+#   ministral-3b-2512        200, 750 requetes/minute
+#
+# La console affiche pourtant 1 req/s pour mistral-small : c'est la famille
+# ministral qui porte le debit reel du palier. Les alias « -latest » ne
+# valent donc rien ici, on epingle les versions datees.
+MODEL_SMALL = "ministral-8b-2512"
+#   ministral-14b-2512       200, 30 requetes/minute
+#
+# D'ou la repartition : le 8b encaisse le volume (sentiment, un appel par
+# article), le 14b sert aux libelles de themes -- une vingtaine par jour,
+# mais ce sont eux que l'utilisateur lit en permanence.
+MODEL_LARGE = "ministral-14b-2512"
 
 _client = None
 _client_lock = Lock()
@@ -40,6 +56,12 @@ _client_lock = Lock()
 _VARS_CLES = ("MISTRAL_API_KEY", "MISTRAL_API_KEY2",
               "MISTRAL_API_KEY3", "MISTRAL_API_KEY4")
 _cle_courante = 0        # index dans _cles()
+
+# Modeles refuses par le palier d'abonnement du compte. Mistral repond 403
+# « tier_not_allowed » : inutile de le redemander a chaque theme, on note le
+# refus et l'on retombe sur MODEL_SMALL pour la duree du processus. Le jour
+# ou le compte monte de palier, la premiere tentative repasse.
+_modeles_refuses = set()
 _nom_actif = None        # nom de variable servant le client en cache
 
 
@@ -57,6 +79,11 @@ def _statut(ex):
             return v
     m = re.search(r"\b([45]\d\d)\b", str(ex))
     return int(m.group(1)) if m else None
+
+
+def _modele_interdit(ex):
+    """Le palier du compte refuse-t-il ce modele ?"""
+    return _statut(ex) == 403 and "tier_not_allowed" in str(ex).lower()
 
 
 def _cle_epuisee(ex):
@@ -156,8 +183,11 @@ def complete_json(system, user, model=MODEL_SMALL, max_tokens=800, retries=2):
     JAMAIS sur une erreur passagère, sinon un incident réseau consommerait
     une clé encore bonne.
     """
+    if model in _modeles_refuses:
+        model = MODEL_SMALL
     while True:
         epuisee = False
+        dernier_429 = False
         for attempt in range(retries + 1):
             try:
                 resp = get_client().chat.complete(
@@ -172,7 +202,14 @@ def complete_json(system, user, model=MODEL_SMALL, max_tokens=800, retries=2):
                 )
                 return parse_json(resp.choices[0].message.content)
             except Exception as ex:
+                if _modele_interdit(ex) and model != MODEL_SMALL:
+                    log.warning("%s refuse par le palier du compte : repli sur %s.",
+                                model, MODEL_SMALL)
+                    _modeles_refuses.add(model)
+                    model = MODEL_SMALL
+                    continue
                 epuisee = _cle_epuisee(ex)
+                dernier_429 = _statut(ex) == 429
                 log.warning("Mistral erreur (tentative %d/%d)%s : %s",
                             attempt + 1, retries + 1,
                             " [clé épuisée]" if epuisee else "", ex)
@@ -184,5 +221,17 @@ def complete_json(system, user, model=MODEL_SMALL, max_tokens=800, retries=2):
                     # de se reinitialiser, d'ou des echecs meme apres plusieurs
                     # tentatives.
                     time.sleep(20 if _statut(ex) == 429 else 3)
+        # Un 429 passager se resout dans les tentatives ; un 429 qui survit a
+        # toutes, espacees de 20 s, vient du compte et non du debit. Constate
+        # sur ce projet : l'en-tete x-ratelimit-limit-req-minute valait 0, le
+        # palier n'autorisant aucune requete par minute -- les cles etaient
+        # valides (GET /models repondait 200) et creditees. Passer a la cle
+        # suivante est la seule chose utile a tenter ici.
+        if dernier_429 and not epuisee:
+            log.warning("429 sur les %d tentatives : limite de debit du compte "
+                        "ou quota, on tente la cle suivante. Verifier "
+                        "x-ratelimit-limit-req-minute sur console.mistral.ai.",
+                        retries + 1)
+            epuisee = True
         if not (epuisee and _basculer()):
             return None

@@ -318,6 +318,7 @@ def _enregistrer(conn, jour, portee, sujets, rows, embeddings, seuil_registre,
     """
     ids = [r[0] for r in rows]
     titres = [r[2] or "" for r in rows]
+    contenus = [r[1] or "" for r in rows]
 
     deja = {i for s in sujets for i in s["membres"]}
     affecte, non_classes = _rattacher_isoles(sujets, embeddings, deja,
@@ -335,6 +336,7 @@ def _enregistrer(conn, jour, portee, sujets, rows, embeddings, seuil_registre,
     for idx, s in enumerate(sujets):
         mots = ", ".join(dict.fromkeys(s["mots"].replace(" | ", ", ").split(", ")))[:400]
         exemples = [titres[i] for i in s["membres"][:10]]
+        morceaux = [contenus[i] for i in s["membres"][:6]]
         if idx in appariement:
             cle, _sim = appariement[idx]
             anciens = conn.execute(
@@ -343,7 +345,8 @@ def _enregistrer(conn, jour, portee, sujets, rows, embeddings, seuil_registre,
             libelle = None
             if _recouvrement(anciens, mots) < RECOUVREMENT_MIN:
                 libelle = _generate_readable_label(
-                    mots, exemples, fallback=" / ".join(mots.split(", ")[:3]))
+                    mots, exemples, fallback=" / ".join(mots.split(", ")[:3]),
+                    extraits=morceaux)
             conn.execute(
                 "UPDATE topics SET top_words = ?, centroid = ?, last_seen = ?, "
                 "active = TRUE, label = COALESCE(?, label) WHERE topic_key = ?",
@@ -351,7 +354,8 @@ def _enregistrer(conn, jour, portee, sujets, rows, embeddings, seuil_registre,
             n_repris += 1
         else:
             libelle = _generate_readable_label(
-                mots, exemples, fallback=" / ".join(mots.split(", ")[:3]))
+                mots, exemples, fallback=" / ".join(mots.split(", ")[:3]),
+                extraits=morceaux)
             cle = conn.execute("SELECT nextval('topic_key_seq')").fetchone()[0]
             conn.execute(
                 "INSERT INTO topics (topic_key, label, top_words, centroid, "

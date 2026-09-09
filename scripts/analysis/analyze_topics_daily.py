@@ -14,13 +14,21 @@ l'autre : les thèmes y sont des moyennes de mois. Une fenêtre d'un jour rend
 chaque journée comparable à la précédente, l'identité des thèmes étant tenue
 par le registre de centroïdes plutôt que par la fenêtre.
 
-Ce que la volumétrie impose. Sur les journées en régime, la presse sort 200 à
-1100 documents, Telegram 100 à 800, la télévision 30 à 475 : c'est assez pour
-regrouper. YouTube tourne à ~25 segments issus d'une ou deux vidéos et VK à
-moins de 10 : les regrouper seuls reviendrait à découper une seule vidéo en
-morceaux. En dessous de MIN_DOCS_SUPPORT un support n'est donc pas clusterisé
--- ses documents sont rattachés aux sujets du jour s'ils en sont assez
-proches, sinon laissés non classés.
+Segments et unités. Une transcription est découpée en segments d'environ
+2 000 signes, parce que l'encodage s'arrête à 512 jetons et que les analyses
+tronquent : le segment est donc l'objet du clustering. Mais une émission de
+trois heures en produit jusqu'à quatre-vingt-treize, et si l'on COMPTE des
+segments elle pèse autant que quatre-vingt-treize articles de presse. Tout ce
+qui sert à décider ou à classer compte donc des unités parentes distinctes :
+le seuil d'un support, la taille d'un thème, son rang. Un cluster qui ne
+recouvre pas MIN_UNITES_CLUSTER unités est écarté -- ce n'est pas un sujet,
+c'est une émission.
+
+Sur les journées en régime, la presse sort 550 à 820 unités et Telegram 700 à
+800, ce qui suffit ; la télévision tombe à une vingtaine et YouTube à deux ou
+trois. Sous MIN_DOCS_SUPPORT le support est repris sur une fenêtre de plusieurs
+jours, et s'il n'y arrive toujours pas ses documents sont rattachés aux sujets
+du jour quand ils en sont assez proches, sinon laissés non classés.
 
 Usage :
   python scripts/analysis/analyze_topics_daily.py                  # aujourd'hui
@@ -28,20 +36,18 @@ Usage :
   python scripts/analysis/analyze_topics_daily.py --backfill 10    # 10 jours
 """
 import argparse
+import re
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 import numpy as np
 
-from scripts.analysis.analyze_topics import (EMBED_MAX_TOKENS, EMBED_MODEL,
-                                             EMBED_PREFIXE, MIN_CONTENT_LEN,
-                                             MIN_CONTENT_LEN_TELEGRAM,
-                                             NOISE_KEY, _cosine_sim_matrix,
-                                             _generate_readable_label,
-                                             _lemmatizing_tokenizer,
-                                             _match_to_registry,
-                                             _neutraliser_oral, ensure_schema)
+from src.topic_labels import _generate_readable_label
+from src.topics import (EMBED_MAX_TOKENS, EMBED_MODEL, EMBED_PREFIXE,
+                        MIN_CONTENT_LEN, MIN_CONTENT_LEN_TELEGRAM, NOISE_KEY,
+                        SQL_PARENT, _cosine_sim_matrix, _lemmatizing_tokenizer,
+                        _match_to_registry, _neutraliser_oral, ensure_schema)
 from src.db import get_conn
 from src.logging_setup import setup_logging
 
@@ -51,15 +57,24 @@ log = setup_logging("topics_daily")
 SUPPORTS = ("press", "telegram", "tv", "youtube", "vk")
 
 # En dessous, un support n'est pas regroupé pour lui-même : HDBSCAN y
-# trouverait la structure d'une poignée de documents, pas des sujets.
-MIN_DOCS_SUPPORT = 40
+# trouverait la structure d'une poignée de documents, pas des sujets. Le seuil
+# compte des UNITÉS distinctes (une émission, une vidéo, un article) et non des
+# segments : une seule émission découpée en quatre-vingt-dix morceaux
+# franchissait autrement n'importe quel seuil sans apporter un seul sujet.
+MIN_DOCS_SUPPORT = 12
 
-# Et surtout : le volume de segments ne dit rien du nombre de sujets. Une
-# journée YouTube, c'est ~25 segments issus d'une ou deux vidéos ; les
-# regrouper produirait « vidéo A » contre « vidéo B », pas des thèmes. On
-# exige donc aussi un minimum d'unités parentes distinctes (une émission, une
-# vidéo, un article).
-MIN_PARENTS_SUPPORT = 5
+# Un cluster doit recouvrir au moins ce nombre d'unités distinctes. C'est la
+# réponse au fourre-tout de registre : quatre-vingts segments d'un même plateau
+# forment un cluster dense et parfaitement homogène, que HDBSCAN retient
+# volontiers, mais qui n'est pas un sujet -- c'est une émission.
+#
+# Mesuré : regrouper les segments d'une émission AVANT le clustering, plutôt
+# que de filtrer après, donne un résultat pire. Le vecteur moyen d'une émission
+# de trois heures est générique, toutes les émissions longues se ressemblent
+# alors entre elles, et le thème dominant absorbait 50 à 67 % de la journée
+# contre 8 à 19 % ici. Un plateau traite réellement plusieurs sujets : le
+# résumer à un point est faux.
+MIN_UNITES_CLUSTER = 3
 
 # Fenetre de repli pour les supports qui n'atteignent jamais ce seuil en une
 # journee. Mesure : YouTube publie 1 a 3 videos par jour, donc jamais assez
@@ -163,13 +178,9 @@ def _ensure_schema_jour(conn, reset=False):
 def _charger(conn, jour):
     """Documents publiés dans la journée, par support."""
     rows = conn.execute(
-        """
+        f"""
         SELECT id, content, title, source_kind,
-               CASE WHEN source_kind = 'youtube'
-                    THEN regexp_extract(url, 'v=([A-Za-z0-9_-]+)', 1)
-                    WHEN source_kind = 'tv'
-                    THEN regexp_extract(url, 'video/([A-Za-z0-9]+)', 1)
-                    ELSE id END AS parent
+               {SQL_PARENT} AS parent
         FROM articles
         WHERE content IS NOT NULL AND language = 'ru'
           AND LENGTH(content) >= (CASE WHEN source_kind = 'telegram' THEN ? ELSE ? END)
@@ -186,13 +197,9 @@ def _charger(conn, jour):
 def _charger_fenetre(conn, jour, support, jours):
     """Documents d'un support sur une fenetre de N jours finissant ce jour."""
     return conn.execute(
-        """
+        f"""
         SELECT id, content, title, source_kind,
-               CASE WHEN source_kind = 'youtube'
-                    THEN regexp_extract(url, 'v=([A-Za-z0-9_-]+)', 1)
-                    WHEN source_kind = 'tv'
-                    THEN regexp_extract(url, 'video/([A-Za-z0-9]+)', 1)
-                    ELSE id END AS parent
+               {SQL_PARENT} AS parent
         FROM articles
         WHERE content IS NOT NULL AND language = 'ru' AND source_kind = ?
           AND LENGTH(content) >= (CASE WHEN source_kind = 'telegram' THEN ? ELSE ? END)
@@ -200,6 +207,27 @@ def _charger_fenetre(conn, jour, support, jours):
         """,
         [support, MIN_CONTENT_LEN_TELEGRAM, MIN_CONTENT_LEN,
          jour - timedelta(days=jours - 1), jour]).fetchall()
+
+
+def _unites(rows, indices):
+    """Nombre d'unites parentes distinctes parmi ces documents."""
+    return len({rows[i][4] for i in indices})
+
+
+def _filtrer_une_seule_unite(clusters, rows):
+    """Ecarte les clusters qui ne recouvrent qu'une poignee d'emissions.
+
+    Un cluster fait de quatre-vingts segments d'une meme emission n'est pas un
+    sujet : c'est une emission. Sans ce filtre, la television fabrique chaque
+    jour des themes qui ne sont que le decoupage d'un plateau, et ils pesaient
+    d'autant plus lourd qu'ils comptaient un document par segment.
+    """
+    gardes = [c for c in clusters if _unites(rows, c["membres"]) >= MIN_UNITES_CLUSTER]
+    ecartes = len(clusters) - len(gardes)
+    if ecartes:
+        log.info("    %d cluster(s) ecarte(s) : moins de %d unités distinctes",
+                 ecartes, MIN_UNITES_CLUSTER)
+    return gardes
 
 
 def _taille_min(n):
@@ -221,10 +249,21 @@ def _clusteriser_support(support, indices, embeddings, docs):
     taille = _taille_min(n)
     # UMAP exige n_neighbors < n : sur une petite journée le défaut planterait.
     voisins = max(2, min(10, n - 1))
+    # UMAP initialise par décomposition spectrale, qui demande à scipy plus de
+    # vecteurs propres qu'il n'y a de points dès que le jeu est petit, et lève
+    # « Cannot use scipy.linalg.eigh for sparse A with k >= N ». Depuis le
+    # regroupement par émission, la télévision est passée de 475 segments à
+    # 17 unités par jour et tombait exactement dans ce cas. Sous ce seuil on
+    # réduit la projection et l'on initialise au hasard, ce qu'UMAP prévoit
+    # pour les petits jeux -- la structure y est de toute façon lisible sans
+    # amorçage spectral.
+    petit = n <= 50
+    composantes = max(2, min(5, n - 2)) if petit else 5
 
     modele = BERTopic(
-        umap_model=UMAP(n_neighbors=voisins, n_components=5, min_dist=0.0,
-                        metric="cosine", random_state=42),
+        umap_model=UMAP(n_neighbors=voisins, n_components=composantes,
+                        min_dist=0.0, metric="cosine", random_state=42,
+                        init="random" if petit else "spectral"),
         hdbscan_model=HDBSCAN(min_cluster_size=taille, metric="euclidean",
                               cluster_selection_method=CLUSTER_SELECTION,
                               prediction_data=True),
@@ -370,13 +409,17 @@ def _enregistrer(conn, jour, portee, sujets, rows, embeddings, seuil_registre,
         cles.append(cle)
 
     lignes = []
+
+    def poser(i, cle, score):
+        lignes.append((ids[i], cle, score, jour, portee))
+
     for idx, s in enumerate(sujets):
         for i in s["membres"]:
-            lignes.append((ids[i], cles[idx], 1.0, jour, portee))
+            poser(i, cles[idx], 1.0)
     for i, (idx, score) in affecte.items():
-        lignes.append((ids[i], cles[idx], score, jour, portee))
+        poser(i, cles[idx], score)
     for i in non_classes:
-        lignes.append((ids[i], NOISE_KEY, 0.0, jour, portee))
+        poser(i, NOISE_KEY, 0.0)
     if lignes:
         conn.executemany(
             "INSERT INTO article_topics (article_id, topic_key, probability, "
@@ -394,8 +437,9 @@ def traiter_jour(conn, jour, seuil_registre, embed):
         log.warning("%s : aucun document éligible, journée ignorée.", jour)
         return
     docs = [r[1] for r in rows]
-    log.info("%s : %d documents (%s)", jour, len(rows),
-             ", ".join(f"{k} {len(v)}" for k, v in
+    log.info("%s : %d documents pour %d unités (%s)", jour, len(rows),
+             len({r[4] for r in rows}),
+             ", ".join(f"{k} {_unites(rows, v)}" for k, v in
                        sorted(par_support.items(), key=lambda x: -len(x[1]))))
 
     # Les marqueurs d'oral sont retirés du texte encodé ; docs reste intact
@@ -407,7 +451,8 @@ def traiter_jour(conn, jour, seuil_registre, embed):
         dtype=float)
 
     ids = [r[0] for r in rows]
-    conn.execute("CREATE OR REPLACE TEMP TABLE _ids_jour AS SELECT UNNEST(?) AS id", [ids])
+    conn.execute("CREATE OR REPLACE TEMP TABLE _ids_jour AS SELECT UNNEST(?) AS id",
+                 [ids])
     conn.execute("DELETE FROM article_topics WHERE article_id IN (SELECT id FROM _ids_jour)")
     conn.execute("DELETE FROM topic_supports WHERE run_date = ?", [jour])
 
@@ -416,9 +461,9 @@ def traiter_jour(conn, jour, seuil_registre, embed):
         indices = par_support.get(support, [])
         if not indices:
             continue
-        n_parents = len({rows[i][4] for i in indices})
-        if len(indices) >= MIN_DOCS_SUPPORT and n_parents >= MIN_PARENTS_SUPPORT:
-            clusters = _clusteriser_support(support, indices, embeddings, docs)
+        if _unites(rows, indices) >= MIN_DOCS_SUPPORT:
+            clusters = _filtrer_une_seule_unite(
+                _clusteriser_support(support, indices, embeddings, docs), rows)
             if not clusters:
                 continue
             _, rep, neuf, nc = _enregistrer(conn, jour, support,
@@ -429,24 +474,26 @@ def traiter_jour(conn, jour, seuil_registre, embed):
             continue
 
         # Trop maigre sur 24 h : on elargit la fenetre pour ce seul support.
-        f_rows = _charger_fenetre(conn, jour, support, FENETRE_SUPPORT_MAIGRE)
-        f_parents = len({r[4] for r in f_rows})
-        if len(f_rows) < MIN_DOCS_SUPPORT or f_parents < MIN_PARENTS_SUPPORT:
+        f_seg = _charger_fenetre(conn, jour, support, FENETRE_SUPPORT_MAIGRE)
+        f_unites = len({r[4] for r in f_seg})
+        if f_unites < MIN_DOCS_SUPPORT:
             log.info("  [%-8s] %5d documents / %d unités sur %d jours -- "
                      "toujours sous le seuil, non regroupé", support,
-                     len(f_rows), f_parents, FENETRE_SUPPORT_MAIGRE)
+                     len(f_seg), f_unites, FENETRE_SUPPORT_MAIGRE)
             conn.executemany(
                 "INSERT INTO article_topics (article_id, topic_key, "
                 "probability, run_date, portee) VALUES (?, ?, ?, ?, ?)",
                 [(ids[i], NOISE_KEY, 0.0, jour, support) for i in indices])
             continue
 
+        f_rows = f_seg
         f_docs = [r[1] for r in f_rows]
         f_emb = np.asarray(
             embed_fenetre([EMBED_PREFIXE + _neutraliser_oral(d) for d in f_docs]),
             dtype=float)
-        clusters = _clusteriser_support(support, list(range(len(f_rows))),
-                                        f_emb, f_docs)
+        clusters = _filtrer_une_seule_unite(
+            _clusteriser_support(support, list(range(len(f_rows))), f_emb,
+                                 f_docs), f_rows)
         if not clusters:
             continue
         # Seuls les documents du jour sont enregistres : le regroupement se
@@ -467,7 +514,8 @@ def traiter_jour(conn, jour, seuil_registre, embed):
 
     # --- 2. Un clustering global, tous supports mêlés ---------------------
     tous = list(range(len(rows)))
-    clusters_g = _clusteriser_support(PORTEE_GLOBALE, tous, embeddings, docs)
+    clusters_g = _filtrer_une_seule_unite(
+        _clusteriser_support(PORTEE_GLOBALE, tous, embeddings, docs), rows)
     if clusters_g:
         sujets_g = _sujets_depuis(clusters_g)
         cles_g, rep, neuf, nc = _enregistrer(
@@ -563,8 +611,9 @@ def run(jour=None, backfill=0, seuil_registre=REGISTRY_THRESHOLD,
         UPDATE topics SET active = (last_seen >= ?) WHERE topic_key != ?""",
         [fin - timedelta(days=7), NOISE_KEY])
     conn.execute(
-        "UPDATE topics SET article_count = (SELECT COUNT(*) FROM article_topics "
-        "WHERE article_topics.topic_key = topics.topic_key)")
+        "UPDATE topics SET article_count = (SELECT COUNT(DISTINCT "
+        f"{SQL_PARENT}) FROM article_topics at_ JOIN articles a "
+        "ON a.id = at_.article_id WHERE at_.topic_key = topics.topic_key)")
 
     # Les evaluations ProxAnn portent sur un clustering donne : celles dont le
     # theme n'existe plus ne veulent plus rien dire, et laissees en place elles

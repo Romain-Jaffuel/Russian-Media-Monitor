@@ -1,91 +1,142 @@
-"""Couverture par source - VERSION CORRIGEE (sans cross-product des joins).
+"""Couverture des analyses : qui est éligible, qui a été traité, où sont les trous.
 
-Usage : python scripts/maintenance/check_coverage.py
+Remplace l'ancien check_coverage.py et diagnose_analyses.py, qui répondaient à
+la même question et interrogeaient tous deux `entities` et `article_meta`,
+tables disparues lors du passage de Gabon à Russia Monitor. Leurs colonnes
+affichaient donc des zéros permanents, et `article_techniques`, bien réelle,
+n'apparaissait nulle part.
+
+Pour éviter que cela se reproduise, le script compare la liste des analyses
+qu'il connaît à ce que contient réellement la base, et signale les deux sens de
+l'écart.
+
+Usage :
+  python scripts/maintenance/check_coverage.py
 """
+import sys
+from pathlib import Path
+
 import duckdb
 
 from src import console_utf8  # noqa: F401 -- stdout/stderr en UTF-8
+from src.topics import MIN_CONTENT_LEN, MIN_CONTENT_LEN_TELEGRAM
 
-c = duckdb.connect("data/russia.duckdb", read_only=True)
+DB = Path("data/russia.duckdb")
 
-# Tables optionnelles : CTE vide si l'analyse correspondante n'a jamais tourne,
-# plutot que de planter sur une table absente.
-_tables = {r[0] for r in c.execute("SHOW TABLES").fetchall()}
-_empty_cte = "SELECT source_name, 0 AS n FROM articles WHERE FALSE GROUP BY source_name"
-ent_sql = ("SELECT a.source_name, COUNT(DISTINCT e.article_id) AS n "
-           "FROM articles a JOIN entities e ON e.article_id = a.id "
-           "GROUP BY a.source_name") if "entities" in _tables else _empty_cte
-snt_sql = ("SELECT a.source_name, COUNT(DISTINCT s.article_id) AS n "
-           "FROM articles a JOIN article_target_sentiment s ON s.article_id = a.id "
-           "GROUP BY a.source_name") if "article_target_sentiment" in _tables else _empty_cte
-thm_sql = ("SELECT a.source_name, COUNT(DISTINCT t.article_id) AS n "
-           "FROM articles a JOIN article_topics t ON t.article_id = a.id "
-           "GROUP BY a.source_name") if "article_topics" in _tables else _empty_cte
-# Pas de filtre sur topic_key != -1 ici : un article classe "bruit" par
-# BERTopic a bien ete traite par analyze_topics.py, juste sans cluster net.
-# L'exclure de ce diagnostic de SANTE du pipeline creait un faux signal
-# PROBLEME sur les sources Telegram (contenu plus court/heterogene, donc
-# plus souvent en bruit que la presse) alors que rien n'est casse.
-met_sql = ("SELECT a.source_name, COUNT(DISTINCT m.article_id) AS n "
-           "FROM articles a JOIN article_meta m ON m.article_id = a.id "
-           "GROUP BY a.source_name") if "article_meta" in _tables else _empty_cte
+# Analyses au grain de l'article, dans l'ordre du pipeline. La clé est la
+# table, la valeur le nom lisible.
+ANALYSES = {
+    "article_target_sentiment": "sentiment multi-cibles",
+    "article_topics": "thèmes",
+    "article_techniques": "procédés de persuasion",
+}
 
-# Seuil de contenu "exploitable" : les posts Telegram sont naturellement
-# courts, un seuil de 300 car. (calibre presse) les flaguerait presque tous
-# a tort en CONTENU MANQUANT.
-_min_len = "CASE WHEN source_kind = 'telegram' THEN 50 ELSE 300 END"
+# Un article est analysable s'il a du texte dans la langue du corpus. Le seuil
+# de la presse écarterait presque tous les posts Telegram, courts par nature.
+ELIGIBLE = (f"content IS NOT NULL AND language = 'ru' AND LENGTH(content) >= "
+            f"CASE WHEN source_kind = 'telegram' THEN {MIN_CONTENT_LEN_TELEGRAM} "
+            f"ELSE {MIN_CONTENT_LEN} END")
 
-# Base : counts depuis articles uniquement (pas de cross-join)
-rows = c.execute(f"""
-    WITH base AS (
-        SELECT source_name,
-               COUNT(*) AS total,
-               SUM(CASE WHEN content IS NOT NULL AND LENGTH(content) >= {_min_len}
-                        THEN 1 ELSE 0 END) AS with_content,
-               SUM(CASE WHEN language = 'ru' THEN 1 ELSE 0 END) AS lang_ru
-        FROM articles
-        GROUP BY source_name
-    ),
-    ent AS ({ent_sql}),
-    snt AS ({snt_sql}),
-    thm AS ({thm_sql}),
-    met AS ({met_sql})
-    SELECT b.source_name, b.total, b.with_content, b.lang_ru,
-           COALESCE(ent.n, 0) AS entities,
-           COALESCE(snt.n, 0) AS sentiment,
-           COALESCE(thm.n, 0) AS themes,
-           COALESCE(met.n, 0) AS meta
-    FROM base b
-    LEFT JOIN ent ON ent.source_name = b.source_name
-    LEFT JOIN snt ON snt.source_name = b.source_name
-    LEFT JOIN thm ON thm.source_name = b.source_name
-    LEFT JOIN met ON met.source_name = b.source_name
-    ORDER BY b.total DESC
-""").fetchall()
 
-print("=" * 95)
-print(f"{'SOURCE':<35} {'TOTAL':>6} {'CONT':>6} {'LANG':>6} {'ENT':>6} "
-      f"{'SENT':>6} {'THM':>6} {'META':>6}")
-print("=" * 95)
-for src, tot, cont, lang, ent, sent, thm, met in rows:
-    flag = ""
-    if tot >= 5 and cont < tot * 0.5:
-        flag = " <- CONTENU MANQUANT"
-    elif tot >= 5 and lang < tot * 0.5:
-        flag = " <- LANG NON DETECTEE"
-    print(f"  {src:<33} {tot:>6} {cont:>6} {lang:>6} {ent:>6} "
-          f"{sent:>6} {thm:>6} {met:>6}{flag}")
+def _tables_par_article(conn):
+    """Tables qui portent une colonne article_id, donc une analyse par article."""
+    return {r[0] for r in conn.execute(
+        "SELECT DISTINCT table_name FROM duckdb_columns() "
+        "WHERE column_name = 'article_id'").fetchall()}
 
-# Totaux globaux
-tot_total = sum(r[1] for r in rows)
-tot_cont = sum(r[2] for r in rows)
-tot_ent = sum(r[4] for r in rows)
-print()
-print(f"  {'TOTAL CORPUS':<33} {tot_total:>6} {tot_cont:>6} {sum(r[3] for r in rows):>6} "
-      f"{tot_ent:>6} {sum(r[5] for r in rows):>6} {sum(r[6] for r in rows):>6} {sum(r[7] for r in rows):>6}")
 
-print()
-print("Legende : TOTAL = articles stockes | CONT = content >= 300 car. "
-      "(50 pour Telegram) | LANG = lang ru | ENT/SENT/THM/META = analyses appliquees")
+def _derive(conn):
+    """Signale les écarts entre les analyses connues du script et la base."""
+    presentes = _tables_par_article(conn)
+    inconnues = presentes - set(ANALYSES)
+    absentes = set(ANALYSES) - presentes
+    for table in sorted(absentes):
+        print(f"  La table {table} ({ANALYSES[table]}) n'existe pas : cette "
+              f"analyse n'a jamais tourné.")
+    for table in sorted(inconnues):
+        print(f"  La table {table} porte des analyses par article mais n'est "
+              f"pas listée dans ce script : ajoutez-la à ANALYSES.")
+    return [t for t in ANALYSES if t in presentes]
 
-c.close()
+
+def _par_source(conn, tables):
+    """Une ligne par source : volume, texte exploitable, part analysée."""
+    colonnes = ", ".join(
+        f"""(SELECT COUNT(DISTINCT x.article_id) FROM {t} x
+             JOIN articles y ON y.id = x.article_id
+             WHERE y.source_name = a.source_name) AS "{t}\""""
+        for t in tables)
+    lignes = conn.execute(f"""
+        SELECT a.source_name, COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE {ELIGIBLE}) AS eligibles
+               {", " + colonnes if colonnes else ""}
+        FROM articles a GROUP BY a.source_name ORDER BY total DESC""").fetchall()
+
+    entetes = "".join(f"{ANALYSES[t][:9]:>10}" for t in tables)
+    print(f"\n{'SOURCE':<34}{'TOTAL':>8}{'ÉLIGIBLES':>11}{entetes}")
+    print("-" * (53 + 10 * len(tables)))
+    for ligne in lignes:
+        nom, total, eligibles = ligne[0], ligne[1], ligne[2]
+        cases = "".join(f"{n:>10}" for n in ligne[3:])
+        # Une source dont la moitié des articles n'a pas de texte exploitable
+        # a un problème de collecte, pas d'analyse.
+        alerte = "  texte manquant" if total >= 5 and eligibles < total / 2 else ""
+        print(f"{nom[:33]:<34}{total:>8}{eligibles:>11}{cases}{alerte}")
+    return lignes
+
+
+def _trous(conn, tables):
+    """Pour chaque analyse, ce qui reste à traiter, et un échantillon."""
+    eligibles = conn.execute(
+        f"SELECT COUNT(*) FROM articles WHERE {ELIGIBLE}").fetchone()[0]
+    print(f"\n{eligibles} articles éligibles dans le corpus.\n")
+    print(f"{'ANALYSE':<28}{'TRAITÉS':>10}{'MANQUANTS':>11}{'COUVERTURE':>12}")
+    print("-" * 61)
+    manque_max = (None, 0)
+    for table in tables:
+        traites = conn.execute(
+            f"SELECT COUNT(DISTINCT x.article_id) FROM {table} x "
+            f"JOIN articles a ON a.id = x.article_id "
+            f"WHERE {ELIGIBLE}").fetchone()[0]
+        manquants = eligibles - traites
+        part = 100 * traites / eligibles if eligibles else 0
+        print(f"{ANALYSES[table]:<28}{traites:>10}{manquants:>11}{part:>11.1f} %")
+        if manquants > manque_max[1]:
+            manque_max = (table, manquants)
+
+    table, manquants = manque_max
+    if not table or manquants <= 0:
+        print("\nToutes les analyses couvrent la totalité des articles éligibles.")
+        return
+    print(f"\nCinq articles éligibles que « {ANALYSES[table]} » n'a pas traités :")
+    for aid, src, quand, titre in conn.execute(f"""
+            SELECT a.id, a.source_name, a.published_at, a.title
+            FROM articles a
+            WHERE {ELIGIBLE}
+              AND NOT EXISTS (SELECT 1 FROM {table} x WHERE x.article_id = a.id)
+            ORDER BY a.published_at DESC NULLS LAST LIMIT 5""").fetchall():
+        print(f"   {str(quand)[:16]:16}  {src[:22]:22}  {(titre or '')[:44]}")
+    print("\nUn manque massif tient d'ordinaire à la clause WHERE de l'analyse ;\n"
+          "un manque partiel, à des articles ajoutés depuis sa dernière passe.")
+
+
+def run():
+    if not DB.exists():
+        print(f"Base introuvable : {DB}")
+        return 1
+    try:
+        conn = duckdb.connect(str(DB), read_only=True)
+    except duckdb.Error as ex:
+        print(f"Ouverture impossible ({ex}). Fermez le tableau de bord et "
+              f"réessayez.")
+        return 1
+    tables = _derive(conn)
+    if tables:
+        _par_source(conn, tables)
+        _trous(conn, tables)
+    conn.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run())

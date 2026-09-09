@@ -118,7 +118,7 @@ def _divergence(compte_a, compte_b, sources_a, min_sources):
 def run(window_days=30, reset=False):
     # Le tokenizer lemmatisant du clustering : meme traitement du russe des
     # deux cotes, sinon les deux analyses ne parlent pas du meme vocabulaire.
-    from scripts.analysis.analyze_topics import _lemmatizing_tokenizer
+    from src.topics import _lemmatizing_tokenizer
 
     conn = get_conn()
     ensure_schema(conn, reset=reset)

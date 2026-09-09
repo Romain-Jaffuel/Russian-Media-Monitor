@@ -12,7 +12,6 @@ rempli), donc pas de second aller-retour HTTP par article.
 import re
 import time
 from datetime import datetime
-from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup

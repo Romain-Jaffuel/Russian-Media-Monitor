@@ -20,9 +20,8 @@ import argparse
 import re
 import sys
 
-from scripts.analysis.analyze_topics import (_LABEL_MAX_MOTS, _degrouper,
-                                             _generate_readable_label,
-                                             _sans_markdown)
+from src.topic_labels import (_LABEL_MAX_MOTS, _degrouper,
+                              _generate_readable_label, _sans_markdown)
 from src.db import get_conn
 from src.logging_setup import setup_logging
 

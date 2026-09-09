@@ -159,9 +159,6 @@ URL_LINKEDIN = "https://www.linkedin.com/in/romain-jaffuel/"
 URL_SITE = "https://romain-jaffuel.github.io/"
 URL_GROLLEAU = "https://flor5378.github.io/"
 URL_GABON = "https://github.com/Flor5378/Gabon-Monitor"
-CREDIT_ORIGINE = ("Ossature initiale du pipeline reprise de "
-                  f"[Gabon Monitor]({URL_GABON}), "
-                  f"de [Florian Grolleau]({URL_GROLLEAU}).")
 CREDIT_ORIGINE_HTML = (
     "Ossature initiale du pipeline reprise de "
     f'<a href="{URL_GABON}" target="_blank" rel="noopener">Gabon Monitor</a>, '
@@ -212,6 +209,19 @@ SQL_PARENT = ("CASE WHEN source_kind = 'youtube' "
               "WHEN source_kind = 'tv' "
               "THEN regexp_extract(url, 'video/([A-Za-z0-9]+)', 1) "
               "ELSE id END")
+
+
+def parent_de(alias="a"):
+    """SQL_PARENT qualifié par un alias, pour les requêtes qui joignent.
+
+    Sert à compter des unités et non des segments : une émission de trois
+    heures produit jusqu'à quatre-vingt-treize lignes dans article_topics, et
+    les compter une par une la faisait peser autant que quatre-vingt-treize
+    articles de presse dans le classement des thèmes.
+    """
+    return (SQL_PARENT.replace("source_kind", f"{alias}.source_kind")
+                      .replace("regexp_extract(url", f"regexp_extract({alias}.url")
+                      .replace("ELSE id", f"ELSE {alias}.id"))
 SQL_OFFSET_S = "TRY_CAST(regexp_extract(url, '[?&#]t=(\\d+)', 1) AS INTEGER)"
 SQL_MOTS = "LENGTH(content) - LENGTH(REPLACE(content, ' ', '')) + 1"
 
@@ -334,9 +344,6 @@ def cols_article(**extra):
 # par leur opposition.
 BLOC_SQL = ("CASE WHEN {a}.type_media IN ('etat', 'para_etat') "
             "THEN 'aligne_etat' ELSE 'independant_exil' END")
-BLOC_LABEL = {"aligne_etat": "Aligné sur l'État",
-              "independant_exil": "Indépendant / exil"}
-
 # Schémas de pondération. Le corpus est un échantillon de commodité : on
 # collecte ce qui est collectable, pas un tirage représentatif. Trois biais s'y
 # superposent -- la composition (73 % de segments pro-Kremlin contre 26 %
@@ -380,20 +387,6 @@ def poids_sql(schema, alias="a"):
     return PONDERATIONS[schema][1].format(a=alias)
 
 
-def taille_effective(poids):
-    """Taille effective d'échantillon (Kish) : (somme w)^2 / somme(w^2).
-
-    Ce que la pondération coute. Si un petit groupe reçoit un poids énorme,
-    la moyenne pondérée repose en pratique sur peu de documents, et le nombre
-    brut de lignes ne le dit pas."""
-    import numpy as _np
-    w = _np.asarray(poids, dtype=float)
-    w = w[w > 0]
-    if not len(w):
-        return 0
-    return float(w.sum() ** 2 / (w ** 2).sum())
-
-
 def col_entier(serie):
     """Colonne d'entiers pour st.dataframe, case vide quand la donnée manque.
 
@@ -409,8 +402,6 @@ def col_entier(serie):
 CHART_FONT = 16
 AXIS_FONT = 15
 LEGEND_FONT = 14
-TABLE_FONT = 14
-
 TARGETS = [
     "ukraine", "etats_unis", "union_europeenne", "otan",
     "allemagne", "france", "pays_baltes", "chine", "inde",
@@ -942,15 +933,6 @@ def with_a(c):
             .replace("published_at", "a.published_at"))
 
 
-def top5_plus_autres(df, gc, vc):
-    top5 = df.groupby(gc)[vc].sum().nlargest(5).index.tolist()
-    df = df.copy()
-    df["display"] = df[gc].where(df[gc].isin(top5), "Autres")
-    cmap = {n: TOP_PALETTE[i] for i, n in enumerate(top5)}
-    cmap["Autres"] = "#6B7280"
-    return df, cmap, top5 + ["Autres"]
-
-
 # Périmètre courant, rappele sous le titre : les filtres vivent dans la barre
 # laterale, qui peut être repliée -- sans ce bandeau, rien a l'écran ne dit
 # sur quoi portent les chiffres qu'on est en train de lire.
@@ -1143,7 +1125,7 @@ with tab_vue:
 with tab_themes:
     aw = with_a(WHERE)
     if not has_topics:
-        st.info("Lancez : python analyze_topics.py")
+        st.info("Lancez : python scripts/analysis/analyze_topics_daily.py")
     else:
         st.caption(
             "Thèmes déduits des articles eux-mêmes, par clustering. Un thème "
@@ -1220,7 +1202,8 @@ with tab_themes:
 
         df_t = conn.execute(
             f"""SELECT t.topic_key, t.label, t.top_words, t.active,
-                       t.first_seen, t.last_seen, COUNT(at_.article_id) AS n
+                       t.first_seen, t.last_seen,
+                       COUNT(DISTINCT {parent_de()}) AS n
             FROM topics t LEFT JOIN article_topics at_ ON at_.topic_key = t.topic_key
             LEFT JOIN articles a ON a.id = at_.article_id
             WHERE t.topic_key != -1 {_fpo('t.')}
@@ -1546,9 +1529,12 @@ with tab_themes:
                 if has_topic_supports:
                     return conn.execute(f"""
                         WITH n AS (
-                            SELECT topic_key, COUNT(*) AS n FROM article_topics
-                            WHERE run_date BETWEEN ? AND ? AND topic_key <> -1
-                              {_fpo()}
+                            SELECT at_.topic_key,
+                                   COUNT(DISTINCT {parent_de()}) AS n
+                            FROM article_topics at_
+                            JOIN articles a ON a.id = at_.article_id
+                            WHERE at_.run_date BETWEEN ? AND ? AND at_.topic_key <> -1
+                              {_fpo('at_.')}
                             GROUP BY 1),
                              s AS (
                             SELECT topic_key,

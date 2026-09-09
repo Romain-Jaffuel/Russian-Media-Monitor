@@ -25,7 +25,6 @@ Usage :
   python scripts/analysis/validate_topics.py --topics 20 --reset
 """
 import argparse
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 

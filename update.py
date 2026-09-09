@@ -40,8 +40,8 @@ STEPS_ANALYSES = [
     # Fenetre de 24 h, un clustering par support puis recoupement entre
     # eux. --backfill 1 repasse la veille : au moment ou la routine tourne
     # elle est complete, alors que le run de la veille ne voyait qu'une
-    # journee tronquee. analyze_topics.py (fenetre 30 j) reste dans le
-    # depot, utilise par tune_topics.py et pour ses fonctions partagees.
+    # journee tronquee. Les primitives partagees sont dans src/topics.py et
+    # src/topic_labels.py.
     ("Themes (clustering 24 h par support)",
      f"{PY} scripts/analysis/analyze_topics_daily.py --backfill 1"),
     # Purement calculatoire, aucun appel d'API : sa place est dans la routine.

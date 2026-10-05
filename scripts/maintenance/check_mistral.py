@@ -21,6 +21,7 @@ import time
 import httpx
 from dotenv import load_dotenv
 
+from src import console_utf8  # noqa: F401 -- stdout/stderr en UTF-8
 from src.llm_mistral import MODEL_LARGE, MODEL_SMALL, _VARS_CLES
 
 URL = "https://api.mistral.ai/v1"

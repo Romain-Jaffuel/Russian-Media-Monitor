@@ -15,6 +15,7 @@ Usage :
   python scripts/maintenance/relabel_topics.py --actifs   # les thèmes actifs seuls
   python scripts/maintenance/relabel_topics.py --essai    # montre sans écrire
   python scripts/maintenance/relabel_topics.py --tout     # reprend TOUS les thèmes
+  python scripts/maintenance/relabel_topics.py --casses   # seulement les libellés cassés
 """
 import argparse
 import re
@@ -73,14 +74,22 @@ def _contexte(conn, cle):
     return titres, extraits
 
 
-def run(actifs_seuls=False, essai=False, tout=False):
+def run(actifs_seuls=False, essai=False, tout=False, casses=False):
     conn = get_conn(read_only=essai)
     tous = conn.execute(
         "SELECT topic_key, label, top_words, portee, article_count FROM topics "
         "WHERE topic_key <> -1"
         + (" AND active" if actifs_seuls else "")
         + " ORDER BY article_count DESC").fetchall()
-    cibles = tous if tout else [t for t in tous if _ameliorable(t[1])]
+    if tout:
+        cibles = tous
+    else:
+        # --casses ne retient que les libellés inutilisables (cyrillique,
+        # marques Markdown, mots collés) et laisse de côté ceux qui sont
+        # seulement un peu longs : de quoi réparer une passe où Mistral n'a
+        # pas répondu, sans retoucher des libellés corrects.
+        critere = _a_reprendre if casses else _ameliorable
+        cibles = [t for t in tous if critere(t[1])]
     log.info("%d thèmes à renommer%s.", len(cibles),
              " (actifs seulement)" if actifs_seuls else "")
     if tout and not essai:
@@ -122,5 +131,9 @@ if __name__ == "__main__":
     ap.add_argument("--tout", action="store_true",
                     help="reprend tous les thèmes, y compris ceux qui sont "
                          "déjà lisibles")
+    ap.add_argument("--casses", action="store_true",
+                    help="ne reprend que les libellés inutilisables, sans "
+                         "toucher à ceux qui sont seulement longs")
     a = ap.parse_args()
-    sys.exit(run(actifs_seuls=a.actifs, essai=a.essai, tout=a.tout))
+    sys.exit(run(actifs_seuls=a.actifs, essai=a.essai, tout=a.tout,
+                 casses=a.casses))
